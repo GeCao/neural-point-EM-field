@@ -4,22 +4,31 @@ import torch.nn.functional as F
 from torch import Tensor
 import math
 
+
 class DenseLayer(nn.Linear):
-    def __init__(self, in_dim: int, out_dim: int, activate: str = "relu", *args, **kwargs) -> None:
+    def __init__(
+        self, in_dim: int, out_dim: int, activate: str = "relu", *args, **kwargs
+    ) -> None:
         if activate:
             self.activation = activate
         else:
-            self.activation = 'linear'
-        super().__init__(in_dim, out_dim, *args,)
+            self.activation = "linear"
+        super().__init__(
+            in_dim,
+            out_dim,
+            *args,
+        )
 
     def reset_parameters(self) -> None:
-        torch.nn.init.xavier_uniform_(self.weight, gain=torch.nn.init.calculate_gain(self.activation))
+        torch.nn.init.xavier_uniform_(
+            self.weight, gain=torch.nn.init.calculate_gain(self.activation)
+        )
         if self.bias is not None:
             torch.nn.init.zeros_(self.bias)
 
     def forward(self, input: Tensor, **kwargs) -> Tensor:
         out = super(DenseLayer, self).forward(input)
-        if self.activation == 'relu':
+        if self.activation == "relu":
             out = F.relu(out)
 
         return out
@@ -50,7 +59,15 @@ class EqualLinear(nn.Module):
 
     """
 
-    def __init__(self, in_channel, out_channel, bias=True, bias_init=0, lr_mul=1, activate=False):
+    def __init__(
+        self,
+        in_channel: int,
+        out_channel: int,
+        bias: bool = True,
+        bias_init: int = 0,
+        lr_mul: int = 1,
+        activate: bool = False,
+    ):
         super().__init__()
 
         self.weight = nn.Parameter(torch.randn(out_channel, in_channel).div_(lr_mul))
@@ -64,20 +81,24 @@ class EqualLinear(nn.Module):
         self.scale = (1 / math.sqrt(in_channel)) * lr_mul
         self.lr_mul = lr_mul
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self.activate:
             out = F.linear(input, self.weight * self.scale)
             out = fused_leaky_relu(out, self.bias * self.lr_mul)
         else:
-            out = F.linear(input, self.weight * self.scale, bias=self.bias * self.lr_mul)
+            out = F.linear(
+                input, self.weight * self.scale, bias=self.bias * self.lr_mul
+            )
         return out
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]})"
+        return (
+            f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]})"
+        )
 
 
 class FusedLeakyReLU(nn.Module):
-    def __init__(self, channel, bias=True, negative_slope=0.2, scale=2 ** 0.5):
+    def __init__(self, channel, bias=True, negative_slope=0.2, scale=2**0.5):
         super().__init__()
 
         if bias:
@@ -89,24 +110,38 @@ class FusedLeakyReLU(nn.Module):
         self.negative_slope = negative_slope
         self.scale = scale
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
         return fused_leaky_relu(input, self.bias, self.negative_slope, self.scale)
 
 
-def fused_leaky_relu(input, bias=None, negative_slope=0.2, scale=2 ** 0.5):
+def fused_leaky_relu(input, bias=None, negative_slope=0.2, scale=2**0.5):
     if input.dtype == torch.float16:
         bias = bias.half()
 
     if bias is not None:
         rest_dim = [1] * (input.ndim - bias.ndim - 1)
-        return F.leaky_relu(input + bias.view(1, bias.shape[0], *rest_dim), negative_slope=0.2) * scale
+        return (
+            F.leaky_relu(
+                input + bias.view(1, bias.shape[0], *rest_dim), negative_slope=0.2
+            )
+            * scale
+        )
 
     else:
         return F.leaky_relu(input, negative_slope=0.2) * scale
 
 
 class ModulationLayer(nn.Module):
-    def __init__(self, in_ch, out_ch, z_dim, demodulate=True, activate=True, bias=True, **kwargs):
+    def __init__(
+        self,
+        in_ch: int,
+        out_ch: int,
+        z_dim: int,
+        demodulate: bool = True,
+        activate: bool = True,
+        bias: bool = True,
+        **kwargs,
+    ):
         super(ModulationLayer, self).__init__()
         self.eps = 1e-8
 
@@ -126,10 +161,9 @@ class ModulationLayer(nn.Module):
             self.bias = nn.Parameter(torch.zeros(1, out_ch))
 
     def __repr__(self):
-        return f'{self.__class__.__name__}({self.in_channel}, {self.out_channel}, z_dim={self.z_dim})'
+        return f"{self.__class__.__name__}({self.in_ch}, {self.out_ch}, z_dim={self.z_dim})"
 
-
-    def forward(self, input, z):
+    def forward(self, input: torch.Tensor, z):
         # feature modulation
         gamma = self.modulation(z)  # B, in_ch
         input = input * gamma
@@ -148,10 +182,10 @@ class ModulationLayer(nn.Module):
 
         out = F.linear(input, weight)
 
-        if hasattr(self, 'activate'):
+        if hasattr(self, "activate"):
             out = self.activate(out)
 
-        if hasattr(self, 'bias'):
+        if hasattr(self, "bias"):
             out = out + self.bias
 
         return out

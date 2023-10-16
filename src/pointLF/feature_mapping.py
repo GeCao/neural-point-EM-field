@@ -6,8 +6,13 @@ import numpy as np
 
 # Positional Encoding
 class PositionalEncoding(nn.Module):
-    def __init__(self, multires, input_dims=3, include_input=True, log_sampling=True):
-
+    def __init__(
+        self,
+        multires: int,
+        input_dims: int = 3,
+        include_input: bool = True,
+        log_sampling: bool = True,
+    ):
         super().__init__()
         self.embed_fns = []
         self.out_dims = 0
@@ -22,7 +27,7 @@ class PositionalEncoding(nn.Module):
         if log_sampling:
             freq_bands = 2.0 ** torch.linspace(0.0, max_freq, steps=N_freqs)
         else:
-            freq_bands = torch.linspace(2.0 ** 0.0, 2.0 ** max_freq, steps=N_freqs)
+            freq_bands = torch.linspace(2.0**0.0, 2.0**max_freq, steps=N_freqs)
 
         for freq in freq_bands:
             for periodic_fn in [torch.sin, torch.cos]:
@@ -55,7 +60,7 @@ class Embedder:
         if self.kwargs["log_sampling"]:
             freq_bands = 2.0 ** torch.linspace(0.0, max_freq, steps=N_freqs)
         else:
-            freq_bands = torch.linspace(2.0 ** 0.0, 2.0 ** max_freq, steps=N_freqs)
+            freq_bands = torch.linspace(2.0**0.0, 2.0**max_freq, steps=N_freqs)
 
         for freq in freq_bands:
             for p_fn in self.kwargs["periodic_fns"]:

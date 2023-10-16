@@ -40,10 +40,10 @@ class PointLightField(nn.Module):
             self._PointFeatures = PointNetDenseCls(k=n_pt_features, feature_transform=feature_transform)
         elif feature_encoder == 'pointnet_lf_pt_only':
             self._PointFeatures = PointNetLightFieldEncoder(k=n_pt_features, feature_transform=feature_transform,
-                                                            points_only=True)
+                                                            points_only=True)  # 1088 = 1024 + 64
         elif feature_encoder == 'pointnet_lf_global':
             self._PointFeatures = PointNetLightFieldEncoder(k=n_pt_features, feature_transform=feature_transform,
-                                                            points_only=False)
+                                                            points_only=False)  # 1024
         elif feature_encoder == 'pointnet_lf_pt_only_weighted':
             self._PointFeatures = PointNetLightFieldEncoder(k=n_pt_features, feature_transform=feature_transform,
                                                             points_only=True)
