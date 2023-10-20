@@ -28,8 +28,11 @@ class CoreManager(AbstractManager):
         self.dim = opt["dim"]
 
         self.opt = opt
-        self._log_manager = LogManager(self, log_to_disk=opt["log_to_disk"])
-        self._data_manager = DataManager(self)
+        self._log_manager = LogManager(
+            root_path=self._root_path, log_to_disk=opt["log_to_disk"]
+        )
+        self._log_manager.Initialization()
+        self._data_manager = DataManager(self.GetDataPath())
 
         self.scene = NeuralScene(
             self, scene_opt=scene_opt, device=self.device, dtype=self.dtype
@@ -37,15 +40,12 @@ class CoreManager(AbstractManager):
         self.model = PointLFEMModel(
             self.scene, opt=opt, device=self.device, dtype=self.dtype
         )
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=opt["lr"])
-        self.loss = torch.nn.MSELoss()
         self.start_epoch = 0
 
         self.is_training = opt.get("is_training")
         self.use_check_point = opt.get("use_check_point")
 
     def Initialization(self):
-        self._log_manager.Initialization()
         self._data_manager.Initialization()
         if self.opt["use_check_point"]:
             success = self.LoadCheckPoint()
@@ -58,24 +58,10 @@ class CoreManager(AbstractManager):
         if self.is_training:
             self.InfoLog("Start Training with parameters: {}".format(self.opt))
             total_steps = self.opt["total_steps"]
-            # TODO: Load data
-            (
-                train_data,
-                checkerboard_data,
-                genz_data,
-                gendiag_data,
-            ) = self._data_manager.LoadData(self.opt)
-            if train_data is None:
-                self.ErrorLog(
-                    "Train DataSet not found, please ensure your data set has been placed carefully"
-                )
-            train_ch = gendiag_data[0]
-            train_floor_idx = gendiag_data[1]
-            train_interactions = gendiag_data[2]
-            train_rx = gendiag_data[3]
-            train_tx = gendiag_data[4]
             for epoch in tqdm(range(self.start_epoch, total_steps)):
-                pass
+                loss, test_loss = self.model.train_on_scene(epoch=epoch)
+                self._log_manager.WriterAddScalar("loss", loss, epoch)
+                self.InfoLog(f"epoch = {epoch}, loss = {loss.item()}")
 
     def SaveCheckPoint(self, epoch: int, loss: float):
         # Additional information
@@ -84,8 +70,8 @@ class CoreManager(AbstractManager):
         torch.save(
             {
                 "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
+                "model_state_dict": self.model.GetRenderer().state_dict(),
+                "optimizer_state_dict": self.model.GetOptimizer(),
                 "loss": loss,
             },
             save_filename,
@@ -146,8 +132,8 @@ class CoreManager(AbstractManager):
 
         # load check point
         check_point = torch.load(save_filename)
-        self.model.load_state_dict(check_point["model_state_dict"])
-        self.optimizer.load_state_dict(check_point["optimizer_state_dict"])
+        self.model.renderer.load_state_dict(check_point["model_state_dict"])
+        self.model.optimizer.load_state_dict(check_point["optimizer_state_dict"])
         self.start_epoch = int(check_point["epoch"])
         loss = check_point["loss"]
 

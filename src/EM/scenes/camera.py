@@ -8,10 +8,10 @@ class Camera(object):
     def __init__(
         self,
         eye: torch.Tensor,
-        up: torch.Tensor,
-        lookat: torch.Tensor,
-        aspect: float,
-        fov: float,
+        up: torch.Tensor = None,
+        lookat: torch.Tensor = None,
+        aspect: float = 1.0,
+        fov: float = 60,
         near: float = 0.01,
         far: float = 1000.0,
         device: torch.device = torch.device("cpu"),
@@ -19,6 +19,15 @@ class Camera(object):
     ) -> None:
         self.device = device
         self.dtype = dtype
+
+        up = (
+            up if up is not None else torch.Tensor([0.0, 1.0, 0.0]).to(dtype).to(device)
+        )
+        lookat = (
+            lookat
+            if lookat is not None
+            else torch.Tensor([0.0, 0.0, -1.0]).to(dtype).to(device)
+        )
 
         self.eye = eye
         self.up = up
@@ -51,7 +60,6 @@ class Camera(object):
         assert self.up is not None
         assert self.lookat is not None
 
-        # TODO: Will ortho mat better to be understood by network?
         fov_cot = 1.0 / math.tan(self.fov / 2.0)
         P_mat = (
             torch.Tensor(
@@ -132,7 +140,6 @@ class Camera(object):
         (include_index,) = torch.where(mark_as_include > 0)
 
         if include_index.shape[0] == 0:
-            # TODO: Default as select points from far away, as background
             return None
 
         return include_index
@@ -163,7 +170,7 @@ class Camera(object):
         ray_sinpitch = torch.sqrt(1.0 - ray_cospitch * ray_cospitch)  # [nrays, npts,]
         ray_distance = ((points - ray_o) * (points - ray_o)).sum(
             dim=-1, keepdim=False
-        ) * ray_sinpitch
+        ) * ray_sinpitch  # [nrays, npts,]
 
         # Find topK
         index = None
@@ -183,20 +190,23 @@ class Camera(object):
                 topK_indices.flatten().cpu().tolist(),
             )
         else:
-            # TODO: Set background
-            pass
+            raise RuntimeError(
+                f"In your input, K-closest = {K_closest}, meanwhile number of points only {n_pts}"
+            )
 
-        topK_points = points.repeat(n_rays, 1, 1)[index]  # [nrays, n_K, 3]
+        topK_points = points.repeat(n_rays, 1, 1)[index].reshape(
+            n_rays, K_closest, 3
+        )  # [nrays, n_K, 3]
         topK_ray_walk = ((topK_points - ray_o) * ray_d).sum(
-            dim=-1, keepdim=False
-        )  # [nrays, n_K,]
+            dim=-1, keepdim=True
+        )  # [nrays, n_K, 1]
         topK_ray_cospitch = (F.normalize(topK_points - ray_o, dim=-1) * ray_d).sum(
-            dim=-1, keepdim=False
-        )  # [nrays, n_K,]
-        topK_ray_pitch = torch.acos(topK_ray_cospitch)  # [nrays, n_K,]
+            dim=-1, keepdim=True
+        )  # [nrays, n_K, 1]
+        topK_ray_pitch = torch.acos(topK_ray_cospitch)  # [nrays, n_K, 1]
         topK_ray_sinpitch = torch.sqrt(1.0 - topK_ray_cospitch * topK_ray_cospitch)
         topK_ray_distance = ((topK_points - ray_o) * (topK_points - ray_o)).sum(
-            dim=-1, keepdim=False
+            dim=-1, keepdim=True
         ) * topK_ray_sinpitch
 
         # TODO: this is not as same as the original code
@@ -210,14 +220,14 @@ class Camera(object):
             dim=-1,
         )
         topK_ray_azimuth = torch.sum(
-            topK_ray_to_points_vector_projected * topK_ray_up, dim=-1, keepdim=False
+            topK_ray_to_points_vector_projected * topK_ray_up, dim=-1, keepdim=True
         )
 
         return [
-            index,
+            topK_indices.unsqueeze(-1),
             topK_points,
-            topK_ray_distance.unsqueeze(-1),
-            topK_ray_walk.unsqueeze(-1),
-            topK_ray_azimuth.unsqueeze(-1),
-            topK_ray_pitch.unsqueeze(-1),
+            topK_ray_distance,
+            topK_ray_walk,
+            topK_ray_azimuth,
+            topK_ray_pitch,
         ]

@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import h5py
-from typing import Dict, Any
+from typing import Dict, Any, List
 import torch
 from torch.utils.data import DataLoader, Dataset
 
@@ -15,18 +15,22 @@ class SceneDataSet(Dataset):
         self.scene = scene
         self.train_type = train_type  # See definition of Enum TrainType from utils
 
-    def __len__(self):
-        return self.scene.cameras.shape[0] * self.scene.cameras.shape[1]
+        num_tx = self.scene.GetNumTransmitters(self.train_type)
+        num_rx = self.scene.GetNumReceivers(self.train_type)
+        self.length = num_tx * num_rx
 
-    def __getitem__(self, index: int) -> Any:
+    def __len__(self) -> int:
+        return self.length
+
+    def __getitem__(self, index: int) -> List[torch.Tensor]:
         with torch.no_grad():
             # points, distance, walk, pitch, azimuth
             return self.scene.RaySample(idx=index, train_type=self.train_type)
 
 
 class DataManager(object):
-    def __init__(self, core_manager: AbstractManager):
-        self._core_manager = core_manager
+    def __init__(self, data_path: str):
+        self.data_path = data_path
 
         self.log_path = None
 
@@ -37,7 +41,10 @@ class DataManager(object):
     def Initialization(self):
         self.initialized = True
 
-    def LoadData(self, opt: Dict):
+    def GetDataPath(self):
+        return self.data_path
+
+    def LoadData(self, is_training: bool = False, test_target: str = "checkerboard"):
         """Load data from disk
         Note the data structure is given below:
         # F := #Environments
@@ -65,9 +72,7 @@ class DataManager(object):
                 reflection with floor,
             ]
         """
-        is_training = opt.get("is_training")
-        test_target = opt.get("test_target")
-        data_path = self._core_manager.GetDataPath()
+        data_path = self.GetDataPath()
         target_list = ["checkerboard", "genz", "gendiag"]
         data_files = os.listdir(data_path)
 
@@ -121,8 +126,5 @@ class DataManager(object):
                                 test_rx,
                                 test_tx,
                             ]
-            elif filename == "objs":
-                # TODO: Load obj files
-                pass
 
         return [result["train"]] + [result[target_name] for target_name in target_list]

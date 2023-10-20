@@ -2,3 +2,4 @@ pandas
 h5py
 pywavefront
 sklearn
+tensorboard

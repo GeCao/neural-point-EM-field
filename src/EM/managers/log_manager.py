@@ -2,15 +2,14 @@ import os
 import time
 
 from src.EM.utils import MessageAttribute, mkdir
-from src.EM.managers import AbstractManager
 
 
 class LogManager(object):
-    def __init__(self, core_manager: AbstractManager, log_to_disk: bool = False):
-        self._core_manager = core_manager
-
+    def __init__(self, root_path: str, log_to_disk: bool = False):
+        self.root_path = root_path
         self.log_path = None
         self.log_to_disk = log_to_disk
+        self.writer = None
 
         self._file_ptr = None
 
@@ -37,10 +36,21 @@ class LogManager(object):
 
             self._file_ptr = open(self.log_path, "a+")
 
+            from torch.utils.tensorboard import SummaryWriter
+
+            self.writer = SummaryWriter(os.path.join(root_path, "log"))
+
         self.initialized = True
+
+    def GetRootPath(self):
+        return self.root_path
 
     def NeedLogToDisk(self):
         return self.log_to_disk
+
+    def WriterAddScalar(self, *args, **kwargs):
+        if self.NeedLogToDisk():
+            self.writer.add_scalar(*args, **kwargs)
 
     def WarnLog(self, sentences=""):
         self._Slog(message_attribute=MessageAttribute.EWarn, sentences=sentences)

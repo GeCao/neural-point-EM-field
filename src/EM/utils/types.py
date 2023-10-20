@@ -25,9 +25,19 @@ class NodeType(Enum):
 
 
 class TrainType(Enum):
-    Train = 0
+    TRAIN = 0
     TEST = 1
     VALIDATION = 2
+
+    def __int__(self):
+        return self.value
+
+
+class FeatureWeighting(Enum):
+    ATTENTION = 0
+    LINEAR = 1
+    MAXPOOL = 2
+    SUM = 3
 
     def __int__(self):
         return self.value

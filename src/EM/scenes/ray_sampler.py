@@ -18,8 +18,8 @@ class RayAABBIntersection(nn.Module):
         super(RayAABBIntersection, self).__init__(*args, **kwargs)
         self.device = device
         self.dtype = dtype
-        self.AABB_min = torch.Tensor([-1.0, -1.0, -1.0], device=device).to(dtype)
-        self.AABB_max = torch.Tensor([1.0, 1.0, 1.0], device=device).to(dtype)
+        self.AABB_min = torch.Tensor([-1.0, -1.0, -1.0]).to(dtype).to(device)
+        self.AABB_max = torch.Tensor([1.0, 1.0, 1.0]).to(dtype).to(device)
 
     def forward(self, ray_o: torch.Tensor, ray_d: torch.Tensor) -> List[torch.Tensor]:
         """See reference from https://gamedev.stackexchange.com/questions/18436/most-efficient-aabb-vs-ray-collision-algorithms"""
@@ -55,16 +55,17 @@ class RayAABBIntersection(nn.Module):
             return [None, None, None]
 
 
-class RaySampler(object):
+class RaySampler(nn.Module):
     def __init__(
         self,
         K_closest: int,
-        scene: AbstractScene,
         device: torch.device = torch.device("cpu"),
         dtype=torch.float32,
+        *args,
+        **kwargs
     ) -> None:
+        super(RaySampler, self).__init__(*args, **kwargs)
         self.K_closest = K_closest
-        self.scene = scene
         self.device = device
         self.dtype = dtype
 
@@ -73,30 +74,19 @@ class RaySampler(object):
     def forward(
         self, idx: int, scene: AbstractScene, train_type: int = 0
     ) -> List[torch.Tensor]:
-        device = self.device
-        dtype = self.dtype
-
-        n_transmitters = scene.GetNumTransmitters()
-        n_cameras = scene.GetNumCameras()
-        frames = scene.GetFrames()  # List[frames]
+        n_transmitters = scene.GetNumTransmitters(train_type=train_type)
+        n_receivers = scene.GetNumReceivers(train_type=train_type)
 
         # 1. Generate rays.
-        # TODO: Rethink, we got all the rays prepared, so no further sampling
-        # Should we add more scenes?
         # [F, T, 1, R, K, I, 4] Intersection
         # [F, T, 1, R, D=8, K] channels
         # TODO: We are only rely one scene for now.
-        (
-            train_ch,
-            train_floor_idx,
-            train_interactions,
-            train_rx,
-            train_tx,
-        ) = scene.GetData(train_type).values()[0]
-        # TODO: We usually think the first one intersection is rx location, I hope so
-        ray_o = train_interactions[..., 0, 1:]  # [F, T, 1, R, K, 3]
-        ray_azimuth = train_ch[..., 3, :]  # [F, T, 1, R, K]
-        ray_elevation = train_ch[..., 4, :]  # [F, T, 1, R, K]
+        ch, floor_idx, interactions, rx, tx = list(scene.GetData(train_type).values())[
+            0
+        ]
+        ray_o = interactions[..., 0, 1:]  # [F, T, 1, R, K, 3]
+        ray_azimuth = ch[..., 3, :]  # [F, T, 1, R, K]
+        ray_elevation = ch[..., 4, :]  # [F, T, 1, R, K]
         ray_d = torch.stack(
             (
                 torch.cos(ray_azimuth) * torch.sin(ray_elevation),
@@ -111,47 +101,43 @@ class RaySampler(object):
         ray_d_detach = ray_d.detach()
 
         # 2. We got many Transmitters, and many Receivers.
-        tx_idx = (idx % (n_transmitters * n_cameras)) // n_cameras
-        rx_idx = (idx % (n_transmitters * n_cameras)) % n_cameras
+        tx_idx = (idx % (n_transmitters * n_receivers)) // n_receivers
+        rx_idx = (idx % (n_transmitters * n_receivers)) % n_receivers
+        env_idx = 0
         # Load related object/ Point clouds firstly
-        point_clouds = frames[rx_idx].GetPointCloud().reshape(-1, 3)
-        object_to_world_mat = frames[rx_idx].GetObjectToWorldTransformation()
+        point_clouds = scene.GetPointCloud(env_index=env_idx).reshape(-1, 3)
         # Before everything, find the intersections
 
-        # Get your view frustum firstly
-        in_frustum_index = scene.GetCamera(
-            transmitter_idx=tx_idx, camera_idx=rx_idx
-        ).FrustumCulling(points=point_clouds)
-
-        ray_o_input = ray_o_detach[0, tx_idx, 0, rx_idx, :, :]  # [n_rays, 3]
-        ray_d_input = ray_d_detach[0, tx_idx, 0, rx_idx, :, :]  # [n_rays, 3]
-        if in_frustum_index is not None:
-            (
-                topK_index,
-                points,
-                distance,
-                walk,
-                azimuth,
-                pitch,
-            ) = scene.GetCamera(transmitter_idx=tx_idx, camera_idx=rx_idx).FindKClosest(
-                ray_o=ray_o_input,
-                ray_d=ray_d_input,
-                points=point_clouds.view(-1, 3)[in_frustum_index, :],
-                K_closest=self.K_closest,
-            )  # [n_rays, K_closest, 3(1)]
-        else:
-            # TODO: Sample from background (Far field)
-            pass
+        ray_o_input = ray_o_detach[env_idx, tx_idx, 0, rx_idx, :, :]  # [n_rays, 3]
+        ray_d_input = ray_d_detach[env_idx, tx_idx, 0, rx_idx, :, :]  # [n_rays, 3]
+        (
+            topK_indices,
+            points,
+            distance,
+            walk,
+            azimuth,
+            pitch,
+        ) = scene.GetTransmitter(
+            transmitter_idx=tx_idx, receiver_idx=rx_idx, train_type=train_type
+        ).FindKClosest(
+            ray_o=ray_o_input,
+            ray_d=ray_d_input,
+            points=point_clouds,
+            K_closest=self.K_closest,
+        )  # [n_rays, K_closest, 3(1)]
 
         # We would also have to get all of the channel ground truth
         gt_channels = torch.transpose(
-            train_ch[0, tx_idx, 0, rx_idx, :, :], -2, -1
+            ch[env_idx, tx_idx, 0, rx_idx, :, :], -2, -1
         )  # [n_rays, 3]
 
         ray_info = torch.cat((ray_o_input, ray_d_input), dim=-1)
+        points_info = torch.cat((points, distance, walk, azimuth, pitch), dim=-1)
 
         return (
+            point_clouds,
             ray_info,
-            torch.cat((points, distance, walk, azimuth, pitch), dim=-1),
+            points_info,
+            topK_indices,
             gt_channels,
         )

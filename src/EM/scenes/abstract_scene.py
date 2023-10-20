@@ -1,17 +1,14 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List
 import torch
+from pytorch3d.structures import Meshes
 
 from src.EM.scenes import Camera
 
 
 class AbstractScene(ABC):
     @abstractmethod
-    def GetFrameIndexFromTransmitter(self, transmitter_index, unique):
-        ...
-
-    @abstractmethod
-    def GetFrameFromTransmitter(self, transmitter_index, unique):
+    def LoadMeshes(self, data_path: str) -> Meshes:
         ...
 
     @abstractmethod
@@ -19,11 +16,13 @@ class AbstractScene(ABC):
         ...
 
     @abstractmethod
-    def GetCameras(self) -> List[Camera]:
+    def GetTransmitters(self) -> List[List[Camera]]:
         ...
 
     @abstractmethod
-    def GetCamera(self, transmitter_idx: int, camera_idx: int) -> Camera:
+    def GetTransmitter(
+        self, transmitter_idx: int, receiver_idx: int, train_type: int
+    ) -> Camera:
         ...
 
     @abstractmethod
@@ -31,19 +30,23 @@ class AbstractScene(ABC):
         ...
 
     @abstractmethod
-    def GetNumRays(self) -> int:
+    def GetNumRays(self, train_type: int) -> int:
         ...
 
     @abstractmethod
-    def GetNumTransmitters(self) -> int:
+    def GetNumTransmitters(self, train_type: int) -> int:
         ...
 
     @abstractmethod
-    def GetNumCameras(self) -> int:
+    def GetNumReceivers(self, train_type: int) -> int:
         ...
 
     @abstractmethod
-    def GetNumEnvs(self) -> int:
+    def GetNumEnvs(self, train_type: int) -> int:
+        ...
+
+    @abstractmethod
+    def GetPointCloud(self, env_index: int) -> torch.Tensor:
         ...
 
     @abstractmethod

@@ -7,7 +7,7 @@ import numpy
 
 from src.EM.scenes import NeuralScene
 from src.EM.utils import ModuleType, NodeType
-from src.pointLF.point_light_field import PointLightField
+from src.EM.renderer import PointLightField
 
 # from src.EM.renderer import PointLightField
 
@@ -19,7 +19,7 @@ class PointLightFieldRenderer(nn.Module):
         device: torch.device = torch.device("cpu"),
         dtype=torch.float32,
         *args,
-        **kwargs
+        **kwargs,
     ) -> None:
         super(PointLightFieldRenderer, self).__init__(*args, **kwargs)
         self.device = device
@@ -56,37 +56,45 @@ class PointLightFieldRenderer(nn.Module):
                 "poseEnc": self.light_field_opt.get("ray_encoding", 4),
             },
             new_encoding=self.light_field_opt.get("new_enc", False),
-            sky_dome=self.light_field_opt.get("sky_dome", False),
+            device=self.device,
+            dtype=self.dtype,
         )
 
         self.add_module(module_name, lightfield)
 
-    def forward_on_batch(self, ray_info, pts_info):
+    def forward_on_batch(
+        self,
+        x: torch.Tensor,
+        ray_info: torch.Tensor,
+        pts_info: torch.Tensor,
+        K_closest_mask: Tuple[List[int]],
+    ):
         if self.training:
             # Do not over hierachy
-            # 1. TODO: See LightFieldRenderer for points mask details
-            # 2. exert light_field_module
-            ray_d = ray_info[..., 3:6]
-            pts_positions = pts_info[..., 0:3]
-            pts_distance = pts_info[..., 3:4]
-            pts_walk = pts_info[..., 4:5]
-            pts_azimuth = pts_info[..., 5:6]
-            pts_pitch = pts_info[..., 6:7]
+            # exert light_field_module
+            # x                           [B, n_pts, 3]
+            ray_d = ray_info[..., 3:6]  # [B, n_rays, 3]
+            pts_positions = pts_info[..., 0:3]  # [B, n_rays, K, 3]
+            pts_distance = pts_info[..., 3:4]  # [B, n_rays, K, 1]
+            pts_walk = pts_info[..., 4:5]  # [B, n_rays, K, 1]
+            pts_azimuth = pts_info[..., 5:6]  # [B, n_rays, K, 1]
+            pts_pitch = pts_info[..., 6:7]  # [B, n_rays, K, 1]
+            # K_closest_mask                  x[mask] -> Shape[B*n_rays*n_pts, 3]
             for module_name, module in self.named_modules():
                 if isinstance(module, PointLightField):
                     prediction = module(
-                        x=pts_positions,
+                        x=x,
                         ray_dirs=ray_d,
-                        closest_mask,
-                        x_dist=pts_distance,
-                        x_proj=pts_walk,
-                        x_pitch=pts_pitch,
-                        x_azimuth=pts_azimuth,
-                        rgb=closest_rgb,
-                        sample_idx=sample_idx,
+                        closest_mask=K_closest_mask,
+                        pts_distance=pts_distance,
+                        pts_walks=pts_walk,
+                        pts_pitch=pts_pitch,
+                        pts_azimuth=pts_azimuth,
                     )
+                    return prediction
                 else:
-                    self.scene.WarnLog(f"Unexpected module {module_name} loaded.")
+                    pass
+                    # self.scene.WarnLog(f"Unexpected module {module_name} loaded.")
         else:
             # Evaluation (Test or Validation)
             pass
