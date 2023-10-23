@@ -44,7 +44,7 @@ class DataManager(object):
     def GetDataPath(self):
         return self.data_path
 
-    def LoadData(self, is_training: bool = False, test_target: str = "all"):
+    def LoadData(self, is_training: bool = False) -> Dict[str, torch.Tensor]:
         """Load data from disk
         Note the data structure is given below:
         # F := #Environments
@@ -118,4 +118,4 @@ class DataManager(object):
                     ]
                     result[target_name] = tensors
 
-        return [result["train"]] + [result[target_name] for target_name in target_list]
+        return result

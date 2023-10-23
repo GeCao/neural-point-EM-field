@@ -50,6 +50,13 @@ class PointLFEMModel(object):
             num_workers=self.opt["num_workers"],
             drop_last=False,
         )
+        self.validation_dataloader = DataLoader(
+            SceneDataSet(scene=scene, train_type=int(TrainType.TEST)),
+            shuffle=False,
+            batch_size=self.opt["batch_size"],
+            num_workers=self.opt["num_workers"],
+            drop_last=False,
+        )
         self.loss = ChannelLoss()
         self.optimizer = Adam(
             [p for p in self.renderer.parameters() if p.requires_grad == True],

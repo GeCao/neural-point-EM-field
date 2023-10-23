@@ -81,9 +81,7 @@ class RaySampler(nn.Module):
         # [F, T, 1, R, K, I, 4] Intersection
         # [F, T, 1, R, D=8, K] channels
         # TODO: We are only rely one scene for now.
-        ch, floor_idx, interactions, rx, tx = list(scene.GetData(train_type).values())[
-            0
-        ]
+        ch, floor_idx, interactions, rx, tx = scene.GetData(train_type)
         ray_o = interactions[..., 0, 1:]  # [F, T, 1, R, K, 3]
         ray_azimuth = ch[..., 3, :]  # [F, T, 1, R, K]
         ray_elevation = ch[..., 4, :]  # [F, T, 1, R, K]

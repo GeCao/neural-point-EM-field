@@ -21,7 +21,7 @@ class AbstractScene(ABC):
         ...
 
     @abstractmethod
-    def GetData(self, train_type: int) -> Dict[str, List[torch.Tensor]]:
+    def GetData(self, train_type: int) -> List[torch.Tensor]:
         ...
 
     @abstractmethod

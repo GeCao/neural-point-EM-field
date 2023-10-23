@@ -56,39 +56,36 @@ class NeuralScene(AbstractScene):
             int(TrainType.VALIDATION): [],
         }  # traintype: List[Frame]
 
-        (
-            train_data,
-            checkerboard_data,
-            genz_data,
-            gendiag_data,
-        ) = core_manager.LoadData(
-            core_manager.opt['is_training'], core_manager.opt['test_target']
-        )
+        data = core_manager.LoadData(core_manager.opt['is_training'])
         train_data = [
-            torch.from_numpy(train_data[i]).to(device).to(dtype)
-            for i in range(len(train_data))
+            torch.from_numpy(data['train'][i]).to(device).to(dtype)
+            for i in range(len(data['train']))
         ]
         checkerboard_data = [
-            torch.from_numpy(checkerboard_data[i]).to(device).to(dtype)
-            for i in range(len(train_data))
+            torch.from_numpy(data['checkerboard'][i]).to(device).to(dtype)
+            for i in range(len(data['checkerboard']))
         ]
         genz_data = [
-            torch.from_numpy(genz_data[i]).to(device).to(dtype)
-            for i in range(len(train_data))
+            torch.from_numpy(data['genz'][i]).to(device).to(dtype)
+            for i in range(len(data['genz']))
         ]
         gendiag_data = [
-            torch.from_numpy(gendiag_data[i]).to(device).to(dtype)
-            for i in range(len(train_data))
+            torch.from_numpy(data['gendiag'][i]).to(device).to(dtype)
+            for i in range(len(data['gendiag']))
         ]
+        data['train'] = train_data
+        data['checkerboard'] = checkerboard_data
+        data['genz'] = genz_data
+        data['gendiag'] = gendiag_data
 
-        self.nodes["train"] = {core_manager.opt["data_set"]: train_data}
-        self.nodes["test"] = {"checkerboard": checkerboard_data}
-        self.nodes["validation"] = {"genz": genz_data, "gendiag": gendiag_data}
+        self.nodes["train"] = train_data
+        self.nodes["test"] = data[core_manager.opt['test_target']]
+        self.nodes["validation"] = data[core_manager.opt['validation_target']]
 
         # [F, T, 1, R, K, I, 4] for interactions
         _, _, train_interactions, _, _ = train_data
-        _, _, test_interactions, _, _ = self.nodes["test"]["checkerboard"]
-        _, _, validation_interactions, _, _ = gendiag_data
+        _, _, test_interactions, _, _ = self.nodes["test"]
+        _, _, validation_interactions, _, _ = self.nodes["validation"]
 
         self.n_train_env = train_interactions.shape[0]  # F
         self.n_train_transmitter = train_interactions.shape[1]  # T
@@ -128,7 +125,7 @@ class NeuralScene(AbstractScene):
             int(TrainType.VALIDATION),
         ]
         for train_type in train_types:
-            _, _, _, _, tx_data = list(self.GetData(train_type=train_type).values())[0]
+            _, _, _, _, tx_data = self.GetData(train_type=train_type)
             n_transmitter = self.GetNumTransmitters(train_type=train_type)
             n_receivers = self.GetNumReceivers(train_type=train_type)
 
@@ -154,7 +151,7 @@ class NeuralScene(AbstractScene):
 
         self.InfoLog("Neural Scene fully prepared.")
 
-    def GetData(self, train_type: int) -> Dict[str, List[torch.Tensor]]:
+    def GetData(self, train_type: int) -> List[torch.Tensor]:
         if train_type == int(TrainType.TRAIN):
             return self.nodes["train"]
         elif train_type == int(TrainType.TEST):

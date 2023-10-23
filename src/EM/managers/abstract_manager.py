@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import Dict
 import torch
 
 
@@ -25,7 +25,7 @@ class AbstractManager(ABC):
         ...
 
     @abstractmethod
-    def LoadData(self, *args, **kwargs) -> List[torch.Tensor]:
+    def LoadData(self, *args, **kwargs) -> Dict[str, torch.Tensor]:
         ...
 
     @abstractmethod

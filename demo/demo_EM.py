@@ -22,8 +22,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--test_target",
         type=str,
-        default="all",
-        choices=["checkerboard", "genz", "gendiag", "all"],
+        default="genz",
+        choices=["checkerboard", "genz", "gendiag"],
+        help="Test?",
+    )
+    parser.add_argument(
+        "--validation_target",
+        type=str,
+        default="gendiag",
+        choices=["checkerboard", "genz", "gendiag"],
         help="Test?",
     )
     parser.add_argument(
