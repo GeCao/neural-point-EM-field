@@ -1,16 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List
 import torch
-from pytorch3d.structures import Meshes
 
 from src.EM.scenes import Camera
 
 
 class AbstractScene(ABC):
-    @abstractmethod
-    def LoadMeshes(self, data_path: str) -> Meshes:
-        ...
-
     @abstractmethod
     def GetFrames(self):
         ...

@@ -1,16 +1,11 @@
 import os
 import torch
-import json
-import pywavefront
 from typing import Dict, Optional, List, Union
 from operator import itemgetter
-from pytorch3d.structures import Meshes
-from pytorch3d.renderer import Textures
-from pytorch3d.ops import sample_points_from_meshes
 
 from src.EM.managers import AbstractManager
 from src.EM.scenes import AbstractScene, Frame, Camera, RaySampler
-from src.EM.utils import TrainType
+from src.EM.utils import TrainType, LoadMeshes, LoadPointCloudFromMesh
 
 
 class NeuralScene(AbstractScene):
@@ -37,8 +32,10 @@ class NeuralScene(AbstractScene):
 
         self.K_closest = scene_opt['lightfield'].get("k_closest", 8)
 
-        meshes = self.LoadMeshes(data_path=core_manager.GetDataPath())
-        self.point_clouds = NeuralScene.LoadPointCloudFromMesh(
+        meshes = LoadMeshes(
+            data_path=core_manager.GetDataPath(), device=device, dtype=dtype
+        )
+        self.point_clouds = LoadPointCloudFromMesh(
             meshes=meshes, num_pts_samples=500
         )  # [F, n_pts, 3]
         core_manager.InfoLog(
@@ -122,59 +119,6 @@ class NeuralScene(AbstractScene):
 
     def RaySample(self, idx: int, train_type: int = 0) -> List[torch.Tensor]:
         return self.ray_sampler(idx, self, train_type)
-
-    def LoadMeshes(self, data_path: str) -> Meshes:
-        """Load mesh data from disk
-        We will typically load mesh from json file where,
-            'verts'--------[NumOfVertices, 3]
-            'faces'--------[NumOfFaces, 3]
-            'edges'--------[NumOfEdges, 2, 3]
-            'verts_rgba'---[1, NumofVertices, 4]
-            'materials'----{NumOfFaces->str}
-            'visible'------{NumOfFaces->bool}
-        are given.
-        """
-        obj_path = os.path.join(data_path, "objs")
-        if not os.path.exists(obj_path):
-            self.ErrorLog(f"Mesh object path :{obj_path} not found, check your DataSet")
-        data_files = os.listdir(obj_path)
-        device = self.device
-        dtype = self.dtype
-
-        meshes = []
-        vertices = []
-        faces = []
-        edges = []
-        verts_rgba = []
-        materials = {}
-        visible = {}
-        for filename in data_files:
-            if filename[-5:] == ".json":
-                json_path = os.path.join(obj_path, filename)
-                with open(json_path, "r") as load_f:
-                    json_data = json.load(load_f)
-                    new_v = torch.Tensor(json_data["verts"]).to(device).to(dtype)
-                    new_f = torch.Tensor(json_data["faces"]).to(device).to(torch.int32)
-                    new_e = torch.Tensor(json_data["edges"]).to(device).to(dtype)
-                    new_vcolor = (
-                        torch.Tensor(json_data["verts_rgba"]).to(device).to(dtype)
-                    )
-                    vertices.append(new_v)
-                    faces.append(new_f)
-                    edges.append(new_e)
-                    verts_rgba.append(new_vcolor.reshape(-1, 4))
-
-        tex = Textures(verts_rgb=verts_rgba)
-        meshes = Meshes(verts=vertices, faces=faces, textures=tex)
-
-        return meshes
-
-    @staticmethod
-    def LoadPointCloudFromMesh(meshes: Meshes, num_pts_samples: int) -> torch.Tensor:
-        point_clouds, normals = sample_points_from_meshes(
-            meshes, num_samples=num_pts_samples, return_normals=True
-        )  # [F, NumOfSamples, 3]
-        return point_clouds
 
     def Initialization(self):
         # Frames

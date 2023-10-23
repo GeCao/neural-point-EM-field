@@ -44,7 +44,7 @@ class DataManager(object):
     def GetDataPath(self):
         return self.data_path
 
-    def LoadData(self, is_training: bool = False, test_target: str = "checkerboard"):
+    def LoadData(self, is_training: bool = False, test_target: str = "all"):
         """Load data from disk
         Note the data structure is given below:
         # F := #Environments
@@ -82,49 +82,40 @@ class DataManager(object):
 
         for filename in data_files:
             if filename[-3:] == ".h5":
+                target_name = None
                 if is_training and "train" in filename:
-                    # load train data:
-                    train_data = h5py.File(os.path.join(data_path, filename))
-                    train_ch = np.array(
-                        train_data["channels"]
-                    )  # [F, T, 1, R, D=8, K], float32
-                    train_floor_idx = np.array(train_data["floor_idx"])  # [3, ], int32
-                    train_interactions = np.array(
-                        train_data["interactions"]
-                    )  # [F, T, 1, R, K, I, 4]
-                    train_rx = np.array(train_data["rx"])  # [F, T, 1, R, dim=3]
-                    train_tx = np.array(train_data["tx"])  # [F, T, dim=3]
-
-                    result["train"] = [
-                        train_ch,
-                        train_floor_idx,
-                        train_interactions,
-                        train_rx,
-                        train_tx,
-                    ]
+                    target_name = "train"
                 else:
-                    # load test data:
-                    for target_name in target_list:
-                        if target_name in filename and (
-                            test_target == "all" or test_target == target_name
-                        ):
-                            test_data = h5py.File(os.path.join(data_path, filename))
-                            test_ch = np.array(
-                                test_data["channels"]
-                            )  # [F, T, 1, R, D=8, K]
-                            test_floor_idx = np.array(test_data["floor_idx"])  # [3, ]
-                            test_interactions = np.array(
-                                test_data["interactions"]
-                            )  # [F, T, 1, R, K, I, 4]
-                            test_rx = np.array(test_data["rx"])  # [F, T, 1, R, dim=3]
-                            test_tx = np.array(test_data["tx"])  # [F, T, dim=3]
+                    for name in target_list:
+                        target_name = name if name in filename else target_name
 
-                            result[target_name] = [
-                                test_ch,
-                                test_floor_idx,
-                                test_interactions,
-                                test_rx,
-                                test_tx,
-                            ]
+                if target_name is None:
+                    continue
+
+                # load train/test data:
+                data = h5py.File(os.path.join(data_path, filename))
+                ch = np.array(
+                    data["channels"][0:1, ...]
+                )  # [F, T, 1, R, D=8, K], float32
+                floor_idx = np.array(data["floor_idx"][0:1, ...])  # [3, ], int32
+                interactions = np.array(
+                    data["interactions"][0:1, ...]
+                )  # [F, T, 1, R, K, I, 4]
+                rx = np.array(data["rx"][0:1, ...])  # [F, T, 1, R, dim=3]
+                tx = np.array(data["tx"][0:1, ...])  # [F, T, dim=3]
+
+                print(f"{target_name}, intersection = {interactions.shape}")
+
+                if result[target_name] is None:
+                    result[target_name] = [ch, floor_idx, interactions, rx, tx]
+                else:
+                    tensors = [
+                        np.concatenate((result[target_name][0], ch), axis=0),
+                        np.concatenate((result[target_name][1], floor_idx), axis=0),
+                        np.concatenate((result[target_name][2], interactions), axis=0),
+                        np.concatenate((result[target_name][3], rx), axis=0),
+                        np.concatenate((result[target_name][4], tx), axis=0),
+                    ]
+                    result[target_name] = tensors
 
         return [result["train"]] + [result[target_name] for target_name in target_list]
