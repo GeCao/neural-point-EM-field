@@ -59,6 +59,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env_idx = 0
+    tx_idx = 0
 
     ch, floor_idx, interactions, rx, tx = GetData(
         data_set=data_set, train_type=0, device=device, dtype=dtype
@@ -72,11 +73,14 @@ if __name__ == "__main__":
     point_clouds = LoadPointCloudFromMesh(
         meshes=meshes, num_pts_samples=1000
     )  # [F, n_pts, 3]
-    rendered_room = RenderRoom(point_clouds).cpu().numpy()
+    rendered_room = RenderRoom(point_clouds[env_idx]).cpu().numpy()
 
     color_r = (
         DrawHeatMapReceivers(
-            rx=rx, ch=ch, res_x=rendered_room.shape[1], res_y=rendered_room.shape[0]
+            rx=rx[env_idx, tx_idx, 0, :, 0:2],
+            gain=ch[env_idx, tx_idx, 0, :, 0, :].sum(dim=-1, keepdim=True),
+            res_x=rendered_room.shape[1],
+            res_y=rendered_room.shape[0],
         )
         .cpu()
         .numpy()

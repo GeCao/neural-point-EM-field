@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict
+from typing import Dict, List
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 from tqdm import tqdm
@@ -12,7 +12,7 @@ from src.EM.scenes import NeuralScene
 from src.EM.renderer import PointLightFieldRenderer
 from src.EM.managers import AbstractManager, SceneDataSet
 from src.EM.losses import ChannelLoss
-from src.EM.utils import TrainType
+from src.EM.utils import TrainType, RenderRoom, DrawHeatMapReceivers
 
 
 class PointLFEMModel(object):
@@ -65,18 +65,18 @@ class PointLFEMModel(object):
 
         self.scene.InfoLog("Point Light Field Model fully prepared")
 
-    def train_on_scene(self, epoch: int) -> torch.Tensor:
+    def train_on_scene(self, epoch: int) -> List[torch.Tensor]:
         self.renderer.train()  # Set train flags as true
 
         loss_list = []
-        for x, ray_info, pts_info, K_closest_indices, gt_channels in tqdm(
+        for x, ray_info, pts_info, K_closest_indices, gt_ch in tqdm(
             self.train_dataloader
         ):
             # Typically [B,         n_pts,     3          ] - x
             # Typically [B, n_rays,            (3+3      )] - ray_info
             # Typically [B, n_rays, K_closest, (3+1+1+1+1)] - pts_info
             # Typically [B, n_rays, K_closest, 1          ] - K_closest_indices
-            # Typically [B, n_rays,            (3+2+2+1)  ] - gt_channels
+            # Typically [B, n_rays,            (3+2+2+1)  ] - gt_ch
             # points, distance, walk, pitch, azimuth in pts_info
             start_time = time.time()
             Batch_size, n_rays, K_closest = (
@@ -95,12 +95,12 @@ class PointLFEMModel(object):
                 .tolist(),
                 K_closest_indices.flatten().cpu().tolist(),
             )
-            predicted_channels = self.renderer.forward_on_batch(
+            predicted_ch = self.renderer.forward_on_batch(
                 x, ray_info, pts_info, K_closest_mask
             )
             end_time = time.time()
 
-            loss = self.loss(predicted_channels, gt_channels)
+            loss = self.loss(predicted_ch, gt_ch)
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -109,11 +109,13 @@ class PointLFEMModel(object):
 
             loss_list.append(loss.item())
 
-        test_loss_list = []
         with torch.no_grad():
-            for x, ray_info, pts_info, K_closest_indices, gt_channels in tqdm(
-                self.test_dataloader
-            ):
+            test_loss_list = []
+            predicted_gains = torch.zeros((0, 1)).to(self.device).to(self.dtype)
+            gt_gains = torch.zeros((0, 1)).to(self.device).to(self.dtype)
+            rx_pos = torch.zeros((0, 3)).to(self.device).to(self.dtype)
+            self.test_dataloader.dataset.step()
+            for x, ray_info, pts_info, K_closest_indices, gt_ch in self.test_dataloader:
                 Batch_size, n_rays, K_closest = (
                     K_closest_indices.shape[0],
                     K_closest_indices.shape[1],
@@ -134,13 +136,37 @@ class PointLFEMModel(object):
                     .tolist(),
                     K_closest_indices.flatten().cpu().tolist(),
                 )
-                predicted_channels = self.renderer.forward_on_batch(
+                predicted_ch = self.renderer.forward_on_batch(
                     x, ray_info, pts_info, K_closest_mask
                 )
-                test_loss = self.loss(predicted_channels, gt_channels)
-                test_loss_list.append(loss.item())
+                test_loss = self.loss(predicted_ch, gt_ch)
+                test_loss_list.append(test_loss.item())
 
-        return np.array(loss_list).mean(), np.array(test_loss_list).mean()
+                predicted_gains = torch.cat(
+                    (
+                        predicted_gains,
+                        predicted_ch.view(-1, predicted_ch.shape[-1])[:, 0:1],
+                    ),
+                    dim=0,
+                )
+                gt_gains = torch.cat(
+                    (
+                        gt_gains,
+                        gt_ch.view(-1, gt_ch.shape[-1])[:, 0:1],
+                    ),
+                    dim=0,
+                )
+                rx_pos = torch.cat(
+                    (
+                        rx_pos,
+                        ray_info.view(-1, 6)[:, 0:3],
+                    ),
+                    dim=0,
+                )
+
+        mean_loss = np.array(loss_list).mean()
+        mean_test_loss = np.array(test_loss_list).mean()
+        return [mean_loss, mean_test_loss, rx_pos, predicted_gains, gt_gains]
 
     def GetOptimizer(self):
         return self.optimizer

@@ -1,0 +1,13 @@
+[2023-10-24 16:21:03] (EInfo) Point Clouds loading finished, with shape=torch.Size([3, 500, 3])
+[2023-10-24 16:22:11] (EInfo) Neural Scene fully prepared.
+[2023-10-24 16:22:11] (EInfo) Point Light Field Model fully prepared
+[2023-10-24 16:22:11] (EWarn) No any saved check point found, we will re-train everything for you
+[2023-10-24 16:22:11] (EInfo) Start Training with parameters: {'is_training': True, 'test_target': 'genz', 'validation_target': 'gendiag', 'data_set': 'wiindoor', 'batch_size': 32, 'num_workers': 0, 'lr': 0.01, 'use_check_point': True, 'total_steps': 100, 'dim': 3, 'log_to_disk': True}
+[2023-10-24 16:24:49] (EInfo) epoch = 0, loss = 151069.49136108623
+[2023-10-24 16:29:22] (EInfo) epoch = 1, loss = 5260.1314021563285
+[2023-10-24 16:34:21] (EInfo) epoch = 2, loss = 4192.21908532345
+[2023-10-24 16:39:22] (EInfo) epoch = 3, loss = 2704.0985669068614
+[2023-10-24 16:42:51] (EInfo) epoch = 4, loss = 1593.3408333826546
+[2023-10-24 16:46:56] (EInfo) epoch = 5, loss = 1202.5092478742504
+[2023-10-24 16:50:32] (EInfo) epoch = 6, loss = 1139.823546469332
+[2023-10-24 16:54:21] (EInfo) epoch = 7, loss = 1132.9966947998664

@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from src.EM.managers import AbstractManager
 from src.EM.scenes import NeuralScene
+from src.EM.utils import TrainType
 
 
 class SceneDataSet(Dataset):
@@ -15,17 +16,34 @@ class SceneDataSet(Dataset):
         self.scene = scene
         self.train_type = train_type  # See definition of Enum TrainType from utils
 
-        num_tx = self.scene.GetNumTransmitters(self.train_type)
-        num_rx = self.scene.GetNumReceivers(self.train_type)
-        self.length = num_tx * num_rx
+        self.num_envs = self.scene.GetNumEnvs(self.train_type)
+        self.num_tx = self.scene.GetNumTransmitters(self.train_type)
+        self.num_rx = self.scene.GetNumReceivers(self.train_type)
+        self.length = self.num_envs * self.num_tx * self.num_rx
+        if train_type != int(TrainType.TRAIN):
+            self.length = self.num_rx
+
+        self.env_idx = 0
+        self.tx_idx = 0
 
     def __len__(self) -> int:
         return self.length
 
+    def step(self):
+        tx_idx = self.tx_idx + 1
+        env_idx = self.env_idx + (tx_idx % self.num_tx)
+
+        self.tx_idx = tx_idx % self.num_tx
+        self.env_idx = env_idx % self.num_envs
+
     def __getitem__(self, index: int) -> List[torch.Tensor]:
         with torch.no_grad():
             # points, distance, walk, pitch, azimuth
-            return self.scene.RaySample(idx=index, train_type=self.train_type)
+            env_idx = self.env_idx if self.train_type != int(TrainType.TRAIN) else None
+            tx_idx = self.tx_idx if self.train_type != int(TrainType.TRAIN) else None
+            return self.scene.RaySample(
+                idx=index, train_type=self.train_type, env_idx=env_idx, tx_idx=tx_idx
+            )
 
 
 class DataManager(object):
@@ -103,8 +121,6 @@ class DataManager(object):
                 )  # [F, T, 1, R, K, I, 4]
                 rx = np.array(data["rx"][0:1, ...])  # [F, T, 1, R, dim=3]
                 tx = np.array(data["tx"][0:1, ...])  # [F, T, dim=3]
-
-                print(f"{target_name}, intersection = {interactions.shape}")
 
                 if result[target_name] is None:
                     result[target_name] = [ch, floor_idx, interactions, rx, tx]

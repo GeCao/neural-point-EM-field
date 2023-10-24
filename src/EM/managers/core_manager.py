@@ -1,11 +1,12 @@
 import os
 import numpy as np
 import torch
+import cv2
 from typing import Dict
 from tqdm import tqdm
 
 from src.EM.managers import AbstractManager, LogManager, DataManager
-from src.EM.utils import mkdir
+from src.EM.utils import mkdir, RenderRoom, DrawHeatMapReceivers
 from src.EM.models import PointLFEMModel
 from src.EM.scenes import NeuralScene
 from src.EM.global_variables import scene_opt
@@ -59,9 +60,53 @@ class CoreManager(AbstractManager):
             self.InfoLog("Start Training with parameters: {}".format(self.opt))
             total_steps = self.opt["total_steps"]
             for epoch in tqdm(range(self.start_epoch, total_steps)):
-                loss, test_loss = self.model.train_on_scene(epoch=epoch)
-                self._log_manager.WriterAddScalar("loss", loss, epoch)
-                self.InfoLog(f"epoch = {epoch}, loss = {loss.item()}")
+                (
+                    loss,
+                    test_loss,
+                    rx_pos,
+                    predicted_gains,
+                    gt_gains,
+                ) = self.model.train_on_scene(epoch=epoch)
+
+                self._log_manager.WriterAddScalar("train_loss", loss, epoch)
+                self._log_manager.WriterAddScalar("test_loss", test_loss, epoch)
+                self.InfoLog(
+                    f"epoch = {epoch}, train_loss = {loss.item()}, test_loss = {test_loss.item()}"
+                )
+
+                env_idx = self.model.test_dataloader.dataset.env_idx
+                point_clouds = self.scene.GetPointCloud(env_index=env_idx)
+                rendered_room = RenderRoom(point_clouds).cpu().numpy()
+                predicted_color = (
+                    DrawHeatMapReceivers(
+                        rx=rx_pos,
+                        gain=predicted_gains,
+                        res_x=rendered_room.shape[1],
+                        res_y=rendered_room.shape[0],
+                    )
+                    .cpu()
+                    .numpy()
+                )
+                gt_color = (
+                    DrawHeatMapReceivers(
+                        rx=rx_pos,
+                        gain=gt_gains,
+                        res_x=rendered_room.shape[1],
+                        res_y=rendered_room.shape[0],
+                    )
+                    .cpu()
+                    .numpy()
+                )
+
+                save_dir = os.path.join(self._save_path, "imgs")
+                mkdir(save_dir)
+                save_path = os.path.join(
+                    save_dir, f"pred_env{env_idx}_epoch{epoch}.png"
+                )
+                cv2.imwrite(save_path, predicted_color)
+
+                save_path = os.path.join(save_dir, f"gt_env{env_idx}_epoch{epoch}.png")
+                cv2.imwrite(save_path, gt_color)
 
     def SaveCheckPoint(self, epoch: int, loss: float):
         # Additional information

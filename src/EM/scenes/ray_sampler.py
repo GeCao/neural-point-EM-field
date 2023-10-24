@@ -72,15 +72,38 @@ class RaySampler(nn.Module):
         self._local_sampler = RayAABBIntersection(device=device, dtype=dtype)
 
     def forward(
-        self, idx: int, scene: AbstractScene, train_type: int = 0
+        self,
+        idx: int,
+        scene: AbstractScene,
+        train_type: int = 0,
+        env_idx: int = None,
+        tx_idx: int = None,
     ) -> List[torch.Tensor]:
+        """
+        Args:
+            idx   (int): index for sampling from dataloader
+            scene (NeuralScene): a scene with points clouds and train/test/validation data
+            train_type (int): Train(0)/Test(1)/Validation(2), see enum TrainType from utils
+            env_idx    (int): None if all various scenes included, or indicate a specific scene only.
+                              Typically, None for train, int for evaluation (Test/Validation)
+            tx_idx     (int): None if all various scenes included, or indicate a specific scene only.
+                              Typically, None for train, int for evaluation (Test/Validation)
+
+        Returns:
+            List[torch.Tensor]:
+                points_clouds: [num_pts, dim=3]---------- All of the original points from this scene
+                ray_info:      [n_rays, 6]--------------- ray_o + ray_d
+                points_info:   [n_rays, K_closest, 7]---- 7 = position(3) + distance(1) + walks(1) + azimuth(1) + pitch(1)
+                topK_indices:  [n_rays, K_closest, 1]---- points_clouds[(linspace, topK_indices.flatten().tolist())] = selected_points
+                gt_channels:   [n_rays, D=3]------------- ground truth of wireless channels
+        """
+        n_envs = scene.GetNumEnvs(train_type=train_type)
         n_transmitters = scene.GetNumTransmitters(train_type=train_type)
         n_receivers = scene.GetNumReceivers(train_type=train_type)
 
         # 1. Generate rays.
         # [F, T, 1, R, K, I, 4] Intersection
         # [F, T, 1, R, D=8, K] channels
-        # TODO: We are only rely one scene for now.
         ch, floor_idx, interactions, rx, tx = scene.GetData(train_type)
         ray_o = interactions[..., 0, 1:]  # [F, T, 1, R, K, 3]
         ray_azimuth = ch[..., 3, :]  # [F, T, 1, R, K]
@@ -99,9 +122,11 @@ class RaySampler(nn.Module):
         ray_d_detach = ray_d.detach()
 
         # 2. We got many Transmitters, and many Receivers.
-        tx_idx = (idx % (n_transmitters * n_receivers)) // n_receivers
-        rx_idx = (idx % (n_transmitters * n_receivers)) % n_receivers
-        env_idx = 0
+        idx = idx % (n_envs * n_transmitters * n_receivers)
+        env_idx = idx // (n_transmitters * n_receivers) if env_idx is None else env_idx
+        idx = idx % (n_transmitters * n_receivers)
+        tx_idx = idx // n_receivers if tx_idx is None else tx_idx
+        rx_idx = idx % n_receivers
         # Load related object/ Point clouds firstly
         point_clouds = scene.GetPointCloud(env_index=env_idx).reshape(-1, 3)
         # Before everything, find the intersections

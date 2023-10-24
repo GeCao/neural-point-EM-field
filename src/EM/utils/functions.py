@@ -223,25 +223,25 @@ def ApplyPositionBasedKernel(
 
 def DrawHeatMapReceivers(
     rx: torch.Tensor,
-    ch: torch.Tensor,
+    gain: torch.Tensor,
     radius: float = None,
     res_x: int = 1024,
     res_y: int = None,
 ) -> torch.Tensor:
-    tx_idx = 5
-    env_idx = 0
+    """
+    Args:
+        rx   (torch.Tensor): [R, 3]
+        gain (torch.Tensor): [R, 1]
+    """
+    device = gain.device
+    dtype = gain.dtype
 
-    device = ch.device
-    dtype = ch.dtype
-
-    rx_proj = rx[env_idx, tx_idx, 0, :, 0:2].reshape(-1, 2)  # [R, 2]
+    rx_proj = rx[:, 0:2]  # [R, 2]
     rx_AABB_min, _ = rx_proj.min(dim=0, keepdim=True)  # [1, 2]
     rx_AABB_max, _ = rx_proj.max(dim=0, keepdim=True)  # [1, 2]
     AABB_length = rx_AABB_max[0] - rx_AABB_min[0]
     rx_proj = (rx_proj - rx_AABB_min) / AABB_length  # [R, 2]
 
-    gain = ch[env_idx, tx_idx, 0, :, 0, :]  # [R, n_rays]
-    gain = gain.sum(dim=-1, keepdim=True)  # [R, 1]
     if radius is None:
         radius = math.sqrt(1.0 / rx_proj.shape[0] / math.pi)
 
@@ -316,9 +316,7 @@ def RenderRoom(
     device = pts.device
     dtype = pts.dtype
 
-    env_idx = 0
-
-    pts_proj = pts[env_idx, :, 0:2].reshape(-1, 2)  # [n_pts, 2]
+    pts_proj = pts[..., 0:2].reshape(-1, 2)  # [n_pts, 2]
     rx_AABB_min, _ = pts_proj.min(dim=0, keepdim=True)  # [1, 2]
     rx_AABB_max, _ = pts_proj.max(dim=0, keepdim=True)  # [1, 2]
     AABB_length = rx_AABB_max[0] - rx_AABB_min[0]

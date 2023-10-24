@@ -36,7 +36,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set", type=str, default="wiindoor", choices=["wiindoor"], help="Train?"
     )
-    parser.add_argument("--batch_size", type=int, default=32, help="Size of Batch")
+    parser.add_argument("--batch_size", type=int, default=64, help="Size of Batch")
     parser.add_argument(
         "--num_workers",
         type=int,

@@ -114,8 +114,10 @@ class NeuralScene(AbstractScene):
         # We need to transfer our data to point clouds firstly.
         self.Initialization()
 
-    def RaySample(self, idx: int, train_type: int = 0) -> List[torch.Tensor]:
-        return self.ray_sampler(idx, self, train_type)
+    def RaySample(
+        self, idx: int, train_type: int = 0, env_idx: int = None, tx_idx: int = None
+    ) -> List[torch.Tensor]:
+        return self.ray_sampler(idx, self, train_type, env_idx=env_idx, tx_idx=tx_idx)
 
     def Initialization(self):
         # Frames
