@@ -30,13 +30,13 @@ class NeuralScene(AbstractScene):
         self.scene_opt = scene_opt
         self.log_manager = core_manager._log_manager
 
-        self.K_closest = scene_opt['lightfield'].get("k_closest", 8)
+        self.K_closest = scene_opt["lightfield"].get("k_closest", 8)
 
-        meshes = LoadMeshes(
+        self.meshes = LoadMeshes(
             data_path=core_manager.GetDataPath(), device=device, dtype=dtype
         )
         self.point_clouds = LoadPointCloudFromMesh(
-            meshes=meshes, num_pts_samples=500
+            meshes=self.meshes, num_pts_samples=1000
         )  # [F, n_pts, 3]
         core_manager.InfoLog(
             f"Point Clouds loading finished, with shape={self.point_clouds.shape}"
@@ -56,31 +56,59 @@ class NeuralScene(AbstractScene):
             int(TrainType.VALIDATION): [],
         }  # traintype: List[Frame]
 
-        data = core_manager.LoadData(core_manager.opt['is_training'])
+        data = core_manager.LoadData(core_manager.opt["is_training"])
         train_data = [
-            torch.from_numpy(data['train'][i]).to(device).to(dtype)
-            for i in range(len(data['train']))
+            torch.from_numpy(data["train"][i]).to(device).to(dtype)
+            for i in range(len(data["train"]))
         ]
         checkerboard_data = [
-            torch.from_numpy(data['checkerboard'][i]).to(device).to(dtype)
-            for i in range(len(data['checkerboard']))
+            torch.from_numpy(data["checkerboard"][i]).to(device).to(dtype)
+            for i in range(len(data["checkerboard"]))
         ]
         genz_data = [
-            torch.from_numpy(data['genz'][i]).to(device).to(dtype)
-            for i in range(len(data['genz']))
+            torch.from_numpy(data["genz"][i]).to(device).to(dtype)
+            for i in range(len(data["genz"]))
         ]
         gendiag_data = [
-            torch.from_numpy(data['gendiag'][i]).to(device).to(dtype)
-            for i in range(len(data['gendiag']))
+            torch.from_numpy(data["gendiag"][i]).to(device).to(dtype)
+            for i in range(len(data["gendiag"]))
         ]
-        data['train'] = train_data
-        data['checkerboard'] = checkerboard_data
-        data['genz'] = genz_data
-        data['gendiag'] = gendiag_data
+        train_data = [
+            train_data[0][:, 0:1, ...],
+            train_data[1],
+            train_data[2][:, 0:1, ...],
+            train_data[3][:, 0:1, ...],
+            train_data[4][:, 0:1, ...],
+        ]
+        checkerboard_data = [
+            checkerboard_data[0][:, 0:1, ...],
+            checkerboard_data[1],
+            checkerboard_data[2][:, 0:1, ...],
+            checkerboard_data[3][:, 0:1, ...],
+            checkerboard_data[4][:, 0:1, ...],
+        ]
+        genz_data = [
+            genz_data[0][:, 0:1, ...],
+            genz_data[1],
+            genz_data[2][:, 0:1, ...],
+            genz_data[3][:, 0:1, ...],
+            genz_data[4][:, 0:1, ...],
+        ]
+        gendiag_data = [
+            gendiag_data[0][:, 0:1, ...],
+            gendiag_data[1],
+            gendiag_data[2][:, 0:1, ...],
+            gendiag_data[3][:, 0:1, ...],
+            gendiag_data[4][:, 0:1, ...],
+        ]
+        data["train"] = train_data
+        data["checkerboard"] = checkerboard_data
+        data["genz"] = genz_data
+        data["gendiag"] = gendiag_data
 
         self.nodes["train"] = train_data
-        self.nodes["test"] = data[core_manager.opt['test_target']]
-        self.nodes["validation"] = data[core_manager.opt['validation_target']]
+        self.nodes["test"] = data[core_manager.opt["test_target"]]
+        self.nodes["validation"] = data[core_manager.opt["validation_target"]]
 
         # [F, T, 1, R, K, I, 4] for interactions
         _, _, train_interactions, _, _ = train_data

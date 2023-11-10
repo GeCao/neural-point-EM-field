@@ -34,20 +34,24 @@ if __name__ == "__main__":
         help="Test?",
     )
     parser.add_argument(
-        "--data_set", type=str, default="wiindoor", choices=["wiindoor"], help="Train?"
+        "--data_set",
+        type=str,
+        default="wi3rooms_0",
+        choices=["wiindoor, wi3rooms_0, wi3rooms_1"],
+        help="Train?",
     )
-    parser.add_argument("--batch_size", type=int, default=64, help="Size of Batch")
+    parser.add_argument("--batch_size", type=int, default=128, help="Size of Batch")
     parser.add_argument(
         "--num_workers",
         type=int,
         default=0,
         help="When sample data from dataset, indicate a number of work threads",
     )
-    parser.add_argument("--lr", type=float, default=0.01, help="learning rate")
+    parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
     parser.add_argument(
         "--use_check_point", type=bool, default=True, help="Use Check Point?"
     )
-    parser.add_argument("--total_steps", type=int, default=100, help="Total Steps")
+    parser.add_argument("--total_steps", type=int, default=500, help="Total Steps")
 
     parser.add_argument(
         "--dim", type=int, default=3, choices=[3], help="dimension: 2D or 3D"

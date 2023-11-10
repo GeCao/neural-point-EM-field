@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, List
+import math
 
 from src.EM.scenes import AbstractScene
 from src.EM.renderer.pointcloud_encoding import MVModel
@@ -88,7 +89,17 @@ class LightFieldNet(nn.Module):
                 h = torch.cat([inputs, h], -1)
 
         out = self.ch_linear(h, z=z)
-        channels = F.leaky_relu(out)  # torch.sigmoid(out)
+        # channels = F.leaky_relu(out)  # torch.sigmoid(out)
+        channels = torch.cat(
+            (
+                out[..., 0:1],
+                torch.sigmoid(out[..., 1:2]) * (2.0 * math.pi),
+                out[..., 2:3],
+                torch.sigmoid(out[..., 3:7]) * (2.0 * math.pi),
+                torch.sigmoid(out[..., 7:8]),
+            ),
+            dim=-1,
+        )
 
         return channels.view(n_batch, n_rays, self.output_ch)
 
@@ -134,8 +145,8 @@ class PointLightField(nn.Module):
             self.n_pt_features = 128
             self.pre_scale = True
             self.feat_weighting = int(FeatureWeighting.MAXPOOL)
-        elif feature_encoder == 'multiview_attention':
-            self._PointFeatures = MVModel(task='cls', backbone='resnet18', feat_size=16)
+        elif feature_encoder == "multiview_attention":
+            self._PointFeatures = MVModel(task="cls", backbone="resnet18", feat_size=16)
             self.n_pt_features = 128
             self.key_len = 64
             self.pre_scale = True
@@ -150,7 +161,7 @@ class PointLightField(nn.Module):
                 new_encoding=self.new_enc,
             )
             n_feat_in = 1
-        elif feature_encoder == 'pointnet_ablation':
+        elif feature_encoder == "pointnet_ablation":
             self._PointFeatures = (
                 PointNetLightFieldEncoder(
                     k=self.n_pt_features,
@@ -205,7 +216,7 @@ class PointLightField(nn.Module):
         ray_dirs: torch.Tensor,
         closest_mask: Tuple[List[int]],
         pts_distance: torch.Tensor,
-        pts_walks: torch.Tensor,
+        pts_proj_distance: torch.Tensor,
         pts_azimuth: torch.Tensor,
         pts_pitch: torch.Tensor,
     ) -> torch.Tensor:
@@ -216,22 +227,20 @@ class PointLightField(nn.Module):
             ray_dirs           (torch.Tensor):                [B, n_rays, K_closest, dim=3]
             closest_mask       (Tuple(List[int], List[int])): x[closest_mask] = [B*n_rays*K_closest, dim=3]
             pts_distance       (torch.Tensor):                [B, n_rays, K_closest, 1]
-            pts_walks          (torch.Tensor):                [B, n_rays, K_closest, 1]
+            pts_proj_distance  (torch.Tensor):                [B, n_rays, K_closest, 1]
             pts_azimuth        (torch.Tensor):                [B, n_rays, K_closest, 1]
             pts_pitch          (torch.Tensor):                [B, n_rays, K_closest, 1]
 
         Returns:
             torch.Tensor: rendered wireless channels with shape = [B, n_rays, 3] (TODO:)
         """
-        batch_size = pts_distance.shape[0]
-        n_rays = pts_distance.shape[1]
-        K_closest = pts_distance.shape[2]
+        K_closest = pts_distance.shape[-2]
 
         # 1. Transform x so that AABB is a unit cube
         if self.pre_scale:
             pts_x = ScaleToUintCube(x)
         else:
-            pts_x = x[..., :3].transpose(2, 1)
+            pts_x = x[..., :3].transpose(2, 1)  # [B, 3, n_pts]
 
         # 2. Encode point clouds to feature
         feat, trans, trans_feat = self._PointFeatures(pts_x, rgb=None)
@@ -248,9 +257,7 @@ class PointLightField(nn.Module):
                 feature_resolution=feat.shape[-1],
             )  # [B, n_rays, K_closest, maps, n_features]
         else:
-            feat = feat[closest_mask].reshape(
-                batch_size, n_rays, K_closest, feat.shape[-1]
-            )
+            feat = feat[closest_mask].reshape(*pts_distance.shape[:-1], feat.shape[-1])
 
         # 4. Apply weighting strategy to features
         if self.feat_weighting == int(FeatureWeighting.MAXPOOL):
@@ -267,7 +274,7 @@ class PointLightField(nn.Module):
                 directions=ray_dirs,
                 features=feat,
                 distance=pts_distance.squeeze(-1),
-                projected_distance=pts_walks.squeeze(-1),
+                projected_distance=pts_proj_distance.squeeze(-1),
                 pitch=pts_pitch.squeeze(-1),
                 azimuth=pts_azimuth.squeeze(-1),
             )
@@ -280,7 +287,7 @@ class PointLightField(nn.Module):
                 directions=ray_dirs,
                 features=feat,
                 distance=pts_distance.squeeze(-1),
-                projected_distance=pts_walks.squeeze(-1),
+                projected_distance=pts_proj_distance.squeeze(-1),
                 pitch=pts_pitch.squeeze(-1),
                 azimuth=pts_azimuth.squeeze(-1),
             )

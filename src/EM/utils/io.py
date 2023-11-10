@@ -1,10 +1,12 @@
 import os
 import json
+import numpy as np
 import torch
 import pywavefront
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import Textures
 from pytorch3d.ops import sample_points_from_meshes
+from pyevtk.hl import pointsToVTK
 
 
 def mkdir(path: str):
@@ -80,3 +82,24 @@ def LoadPointCloudFromMesh(meshes: Meshes, num_pts_samples: int) -> torch.Tensor
         meshes, num_samples=num_pts_samples, return_normals=True
     )  # [F, NumOfSamples, 3]
     return point_clouds
+
+
+def ExportVTKFile(
+    save_path: str, rx_pos: torch.Tensor, gain: torch.Tensor, point_clouds: torch.Tensor
+):
+    x = rx_pos[..., 0].flatten().cpu().numpy()
+    y = rx_pos[..., 1].flatten().cpu().numpy()
+    z = rx_pos[..., 2].flatten().cpu().numpy()
+    gain = gain.cpu().flatten().numpy()
+
+    x_obs = point_clouds[..., 0].flatten().cpu().numpy()
+    y_obs = point_clouds[..., 1].flatten().cpu().numpy()
+    z_obs = 0 * point_clouds[..., 2].flatten().cpu().numpy() + z.mean()
+    obs_val = 0 * x_obs + gain.mean()
+
+    x = np.concatenate((x, x_obs), axis=0)
+    y = np.concatenate((y, y_obs), axis=0)
+    z = np.concatenate((z, z_obs), axis=0)
+    gain = np.concatenate((gain, obs_val), axis=0)
+
+    pointsToVTK(save_path, x, y, z, data={"gain": gain})

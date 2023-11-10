@@ -7,11 +7,14 @@ import torch.nn.functional as F
 import scipy.stats as st
 from typing import Tuple, List
 
+from src.EM.utils import Splatter
+from src.EM.utils import Linear, Quadratic
+
 
 def ScaleToUintCube(points: torch.Tensor, scale: float = 1.0 / 1.4):
-    assert points.dim() == 3
+    assert points.dim() == 3 or points.dim() == 2
 
-    batch_size = points.shape[0]
+    batch_size = points.shape[0] if points.dim() == 3 else 1
     dim = 3
 
     AABB_min, _ = points.view(batch_size, -1, dim).min(dim=1, keepdim=True)  # [B, 3]
@@ -23,6 +26,7 @@ def ScaleToUintCube(points: torch.Tensor, scale: float = 1.0 / 1.4):
     scaled_points = torch.clamp(scaled_points, -1.0, 1.0)
 
     scaled_points = scaled_points * scale
+    scaled_points = scaled_points.reshape(*points.shape)
 
     return scaled_points
 
@@ -121,7 +125,7 @@ def export_asset(save_path: str, vertices: np.ndarray, faces: np.ndarray):
 
 
 def gkern(
-    kernlen=21, nsig=3, device: torch.device = torch.device("cpu"), dtype=torch.float32
+    kernlen=21, nsig=7, device: torch.device = torch.device("cpu"), dtype=torch.float32
 ):
     """Returns a 2D Gaussian kernel."""
 
@@ -130,63 +134,6 @@ def gkern(
     kern2d = np.outer(kern1d, kern1d)
     res = kern2d / kern2d.sum()
     return torch.from_numpy(res).to(device).to(dtype)
-
-
-def DrawHeatMapTransmitters(
-    tx: np.ndarray,
-    ch: np.ndarray,
-    radius: float = None,
-    res_x: int = 256,
-):
-    env_idx = 0
-    tx_idx = 0
-
-    device = ch.device
-    dtype = ch.dtype
-
-    tx_proj = tx[env_idx, :, 0:2].reshape(-1, 2)  # [T, 2]
-    tx_AABB_min = np.min(tx_proj, axis=0, keepdims=True)
-    tx_AABB_max = np.max(tx_proj, axis=0, keepdims=True)
-    tx_proj = tx_proj[0:1, :]
-    tx_proj = (tx_proj - tx_AABB_min) / (tx_AABB_max - tx_AABB_min)  # [T, 2]
-
-    gain = ch[:, :, 0, :, 0, :]  # [F, T, R, n_rays]
-    gain = np.sum(gain.sum(axis=-1), axis=-1).reshape(-1, 1)  # [T, 1]
-    if radius is None:
-        radius = math.sqrt(1.0 / tx_proj.shape[0] / math.pi)
-
-    AABB_length = tx_AABB_max[0] - tx_AABB_min[0]
-    width = AABB_length[0]
-    height = AABB_length[1]
-    aspect = float(width / height)
-    H, W = math.ceil(res_x / aspect), res_x
-    r = int(radius * res_x)
-    grid = np.zeros((1, H, W), dtype=np.float32)
-    gs_kernel = gkern(kernlen=2 * r + 1, dtype=dtype, device=device)
-    # splatt from particles to grid:
-    for tx_idx in range(tx_proj.shape[0]):
-        tx_pos = tx_proj[tx_idx]
-        x = int(tx_pos[0] * W)
-        y = int(tx_pos[1] * H)
-        add_grid = gs_kernel * gain[tx_idx, 0]
-        for i in range(-r, r + 1):
-            for j in range(-r, r + 1):
-                index = [y + j, x + i]
-                if index[0] < 0 or index[1] < 0 or index[0] >= H or index[1] >= W:
-                    continue
-                else:
-                    grid[0, index[0], index[1]] += add_grid[j + r, i + r]
-
-    grid_min, grid_max = np.min(grid), np.max(grid)
-    grid = (grid - grid_min) / (grid_max - grid_min)
-    color_b = (grid < 0.5) * (0.5 - grid) * 2.0
-    color_r = (grid >= 0.5) * (grid - 0.5) * 2.0
-    color = np.concatenate(
-        (color_r, np.zeros_like(color_r), color_b), axis=0
-    )  # [3, H, W]
-    color = np.swapaxes(color * 255, axis1=0, axis2=2)  # [W, H, 3]
-
-    return color
 
 
 def ApplyPositionBasedKernel(
@@ -210,7 +157,7 @@ def ApplyPositionBasedKernel(
         grid_pos[:, 0].cpu().tolist(),
     )  # (y-idx, x-idx)
     grid = grid.reshape(1, 1, H, W)
-    grid_pad = F.pad(grid, pad=(r, r, r, r), mode="constant", value=0)
+    grid_pad = F.pad(grid, pad=(r, r, r, r), mode="replicate")
     grid_pad = grid_pad.reshape(*grid_pad.shape[-2:])
     for i in range(kernel_size):
         for j in range(kernel_size):
@@ -243,7 +190,7 @@ def DrawHeatMapReceivers(
     rx_proj = (rx_proj - rx_AABB_min) / AABB_length  # [R, 2]
 
     if radius is None:
-        radius = math.sqrt(1.0 / rx_proj.shape[0] / math.pi)
+        radius = int(math.sqrt(1.0 / rx_proj.shape[0] / math.pi))
 
     if res_y is None:
         width = AABB_length[0]
@@ -264,16 +211,7 @@ def DrawHeatMapReceivers(
         grid=grid, kernel=gs_kernel, grid_pos=rx_proj, gain=gain
     )
 
-    grid_min, grid_max = grid.min(), grid.max()
-    grid = (grid - grid_min) / (grid_max - grid_min)
-    grid = grid.reshape(1, *grid.shape[-2:])
-    color_b = (grid < 0.5) * (0.5 - grid) * 2.0
-    color_g = ((grid - 0.5).abs() < 0.25) * (0.25 - (grid - 0.5).abs()) * 4
-    color_r = (grid >= 0.5) * (grid - 0.5) * 2.0
-    color = torch.cat((color_r, color_g, color_b), axis=0)  # [3, H, W]
-    color = torch.permute(color * 255, dims=(1, 2, 0))  # [W, H, 3]
-
-    return color
+    return grid
 
 
 def DeleteFloorOrCeil(
@@ -330,7 +268,7 @@ def RenderRoom(
     height = AABB_length[1]
     aspect = float(width / height)
     H, W = math.ceil(res_x / aspect), res_x
-    r = 5
+    r = 3
     grid = torch.zeros((1, 1, H, W)).to(dtype).to(device)
     gs_kernel = gkern(kernlen=2 * r + 1, device=device, dtype=dtype)
     gs_kernel = gs_kernel.reshape(1, 1, 2 * r + 1, 2 * r + 1)
@@ -346,6 +284,102 @@ def RenderRoom(
     grid_min, grid_max = grid.min(), grid.max()
     grid = (grid - grid_min) / (grid_max - grid_min)
     grid = grid.reshape(1, *grid.shape[-2:])
-    color = torch.permute(grid * 255, dims=(1, 2, 0))  # [W, H, 3]
+    color = torch.permute(grid * 255, dims=(1, 2, 0))  # [H, W, 3]
+
+    return color
+
+
+def SplatFromParticlesToGrid(
+    particles: torch.Tensor, attributes: torch.Tensor, res_x: int, res_y: int
+) -> torch.Tensor:
+    dtype = particles.dtype
+    device = particles.device
+
+    dim = particles.shape[-1]
+    assert dim == 2 or dim == 3
+
+    if len(particles.shape) == 2:
+        particles = particles.unsqueeze(0)
+    if len(attributes.shape) == 2:
+        attributes = attributes.unsqueeze(0)
+    batch_size = particles.shape[0]
+    assert batch_size == 1
+
+    particles = particles.reshape(batch_size, -1, particles.shape[-1])
+    attributes = attributes.reshape(batch_size, -1, attributes.shape[-1])
+    assert particles.shape[-2] == attributes.shape[-2] or attributes.shape[-2] == 1
+
+    # From particle to grid
+    AABB_min, _ = particles.min(dim=-2, keepdim=True)  # [B, 1, dim]
+    AABB_max, _ = particles.max(dim=-2, keepdim=True)  # [B, 1, dim]
+    domain_bounding_box = torch.cat((AABB_min, AABB_max), dim=-2)  # [B, 2, dim]
+    domain_bounding_box = domain_bounding_box.transpose(-1, -2)  # [B, dim, 2]
+    bbox_diff = domain_bounding_box[..., 1] - domain_bounding_box[..., 0]  # [B, dim]
+    simulation_size = (
+        torch.Tensor([[[res_x, res_y]]]).to(torch.int32).to(particles.device)
+    )  # [B, 1, dim]
+    # flip: from [(D), H, W] flip to [W, H, (D)]
+    # simulation_size = torch.flip(simulation_size.clone(), dims=[0])
+    cell_size = bbox_diff / simulation_size  # [B, dim]
+    cell_size = cell_size.max()
+
+    # Recover
+    domain_bounding_box[..., 1] = (
+        domain_bounding_box[..., 0] + cell_size * simulation_size
+    )
+
+    kernel = Quadratic(support_radius=4)
+    splatter = Splatter(
+        kernel=kernel,
+        cell_size=cell_size,
+        normalization=True,
+        ndim=dim,
+        grad_ckpt="off",
+    )
+
+    grid, _ = splatter(
+        particles,
+        attributes,
+        domain_bounding_box,
+    )
+
+    return grid
+
+
+def ImageBlur(grid: torch.Tensor, r: int = 15) -> torch.Tensor:
+    input_grid_shape_is_3 = len(grid.shape) == 3
+    if input_grid_shape_is_3:
+        grid = grid.unsqueeze(0)
+
+    assert len(grid.shape) == 4
+
+    # Do conv
+    device = grid.device
+    dtype = grid.dtype
+
+    gs_kernel = gkern(kernlen=2 * r + 1, device=device, dtype=dtype)
+    gs_kernel = gs_kernel.reshape(1, 1, 2 * r + 1, 2 * r + 1)
+    # first pad the tensor with zeros
+    grid_pad = F.pad(input=grid, pad=(r, r, r, r), mode="replicate")
+
+    B, C, H, W = grid.shape
+    grid = torch.zeros((B, 0, H, W)).to(device).to(dtype)
+    for i in range(C):
+        this_channel = F.conv2d(grid_pad[:, i, :, :].unsqueeze(1), gs_kernel)  # Do conv
+        grid = torch.cat((grid, this_channel), dim=1)
+
+    if input_grid_shape_is_3:
+        grid = grid.squeeze(0)
+
+    return grid
+
+
+def FromGridToColor(grid: torch.Tensor):
+    grid = grid.reshape(1, *grid.shape[-2:])
+    color_b = (grid < 0.5) * (0.5 - grid) * 2.0
+    color_r = 0 * (((grid - 0.5).abs() < 0.25) * (0.25 - (grid - 0.5).abs()) * 4)
+    color_g = (grid >= 0.5) * (grid - 0.5) * 2.0
+    color = torch.cat((color_b, color_g, color_r), axis=0)  # [3, H, W]
+    color = torch.permute(color * 255, dims=(1, 2, 0))  # [H, W, 3]
 
     return color

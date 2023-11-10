@@ -31,14 +31,14 @@ class SceneDataSet(Dataset):
 
     def step(self):
         tx_idx = self.tx_idx + 1
-        env_idx = self.env_idx + (tx_idx % self.num_tx)
+        env_idx = self.env_idx + tx_idx
 
         self.tx_idx = tx_idx % self.num_tx
         self.env_idx = env_idx % self.num_envs
 
     def __getitem__(self, index: int) -> List[torch.Tensor]:
         with torch.no_grad():
-            # points, distance, walk, pitch, azimuth
+            # points, distance, proj_distance, pitch, azimuth
             env_idx = self.env_idx if self.train_type != int(TrainType.TRAIN) else None
             tx_idx = self.tx_idx if self.train_type != int(TrainType.TRAIN) else None
             return self.scene.RaySample(

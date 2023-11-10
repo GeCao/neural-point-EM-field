@@ -107,42 +107,61 @@ class Camera(object):
 
         return V_mat
 
-    def FrustumCulling(self, points: torch.Tensor) -> torch.Tensor:
-        points = points.view(-1, 3)
+    def FrustumCulling(
+        self, points: torch.Tensor, ray_o: torch.Tensor, ray_d: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Args:
+            points   (torch.Tensor): [n_pts, 3]
+            ray_o    (torch.Tensor): [n_rays, 3]
+            ray_d    (torch.Tensor): [n_rays, 3]
 
-        negz_axis = F.normalize(self.lookat - self.eye, dim=-1)
-        y_axis = self.up  # Cannot always ensure indicated z, y ortho
+        Returns:
+            torch.Tensor: TODO
+        """
+        device = points.device
+        dtype = points.dtype
+        points = points.view(1, -1, 3)
+        ray_o = ray_o.view(-1, 1, 3)
+        ray_d = ray_d.view(-1, 1, 3)
+        fov = math.radians(10)
+        near = 0.1
+        far = 1000
+        aspect = 1.0
+
+        negz_axis = ray_d
+        y_axis = torch.Tensor([[[0.0, 1.0, 0.0]]]).to(device).to(dtype)
         x_axis = F.normalize(torch.cross(y_axis, -negz_axis, dim=-1), dim=-1)
         y_axis = F.normalize(torch.cross(x_axis, negz_axis, dim=-1), dim=-1)
 
         # 1. Along with the -z axis, get all of the distance between eye and points
-        negz_walk = ((points - self.eye) * negz_axis).sum(
-            dim=-1, keepdim=False
-        )  # [-1,]
-        negz_proj_points = self.eye + negz_walk.unsqueeze(-1) * negz_axis  # [-1, 3]
+        negz_walk = ((points - ray_o) * negz_axis).sum(
+            dim=-1, keepdim=True
+        )  # [n_rays, n_pts, 1]
+        negz_proj_points = ray_o + negz_walk * negz_axis  # [n_rays, n_pts, 3]
         negz_distance_x = (
-            ((points - negz_proj_points) * x_axis).sum(dim=-1, keepdim=False).abs()
-        )  # [-1,]
+            ((points - negz_proj_points) * x_axis).sum(dim=-1, keepdim=True).abs()
+        )  # [n_rays, n_pts, 1]
         negz_distance_y = (
-            ((points - negz_proj_points) * y_axis).sum(dim=-1, keepdim=False).abs()
-        )  # [-1,]
+            ((points - negz_proj_points) * y_axis).sum(dim=-1, keepdim=True).abs()
+        )  # [n_rays, n_pts, 1]
 
         # 2. every z_distance affines a view plane
-        half_height = negz_walk * math.tan(self.fov / 2.0)
-        half_width = self.aspect * half_height
+        half_height = negz_walk * math.tan(fov / 2.0)
+        half_width = aspect * half_height
 
         mark_as_include = (
-            (negz_distance_x <= half_width)
-            * (negz_distance_y <= half_height)
-            * (negz_walk > self.near)
-            * (negz_walk < self.far)
-        ).to(torch.bool)
-        (include_index,) = torch.where(mark_as_include > 0)
+            (
+                (negz_distance_x <= half_width)
+                * (negz_distance_y <= half_height)
+                * (negz_walk > near)
+                * (negz_walk < far)
+            )
+            .squeeze(-1)
+            .to(torch.bool)
+        )
 
-        if include_index.shape[0] == 0:
-            return None
-
-        return include_index
+        return mark_as_include
 
     def FindKClosest(
         self,
@@ -164,20 +183,44 @@ class Camera(object):
         x_axis = F.normalize(torch.cross(y_axis, -negz_axis, dim=-1), dim=-1)
         y_axis = F.normalize(torch.cross(x_axis, negz_axis, dim=-1), dim=-1)
 
-        ray_cospitch = (F.normalize(points - ray_o, dim=-1) * ray_d).sum(
+        ray_cosphi = (F.normalize(points - ray_o, dim=-1) * ray_d).sum(
             dim=-1, keepdim=False
         )  # [nrays, npts,]
-        ray_sinpitch = torch.sqrt(1.0 - ray_cospitch * ray_cospitch)  # [nrays, npts,]
+        ray_sinphi = torch.sqrt(1.0 - ray_cosphi * ray_cosphi)  # [nrays, npts,]
         ray_distance = ((points - ray_o) * (points - ray_o)).sum(
             dim=-1, keepdim=False
-        ) * ray_sinpitch  # [nrays, npts,]
+        ).sqrt() * ray_sinphi  # [nrays, npts,]
+
+        # Exert Frustum Culling
+        in_frustum_mask = self.FrustumCulling(points=points, ray_o=ray_o, ray_d=ray_d)
+        assert len(in_frustum_mask.shape) == 2
+
+        # Frumstum culling: fill outside-frustum distance with a big value
+        far_val = ray_distance.max() * 2
+        ray_distance_with_farval = torch.where(
+            in_frustum_mask, ray_distance, far_val * torch.ones_like(ray_distance)
+        )
+        valid_ray_mask = (
+            (in_frustum_mask.sum(dim=1, keepdim=True) > K_closest)
+            .to(torch.bool)
+            .repeat(1, n_pts)
+        )
+        ray_distance = torch.where(
+            valid_ray_mask, ray_distance_with_farval, ray_distance
+        )
 
         # Find topK
         index = None
         if K_closest < n_pts:
-            _, topK_indices = torch.topk(
+            topK_ray_distance, topK_indices = torch.topk(
                 input=ray_distance, k=K_closest, largest=False, dim=-1
             )  # [n_rays, n_K]
+            cirtera = far_val * 0.75
+            topK_indices = torch.where(
+                topK_ray_distance < cirtera,
+                topK_indices,
+                topK_indices[:, 0:1].repeat(1, K_closest),
+            )
             index = (
                 torch.linspace(
                     0, n_rays - 1, n_rays, device=ray_d.device, dtype=torch.int32
@@ -197,37 +240,35 @@ class Camera(object):
         topK_points = points.repeat(n_rays, 1, 1)[index].reshape(
             n_rays, K_closest, 3
         )  # [nrays, n_K, 3]
-        topK_ray_walk = ((topK_points - ray_o) * ray_d).sum(
+        topK_ray_cosphi = (F.normalize(topK_points - ray_o, dim=-1) * ray_d).sum(
             dim=-1, keepdim=True
         )  # [nrays, n_K, 1]
-        topK_ray_cospitch = (F.normalize(topK_points - ray_o, dim=-1) * ray_d).sum(
-            dim=-1, keepdim=True
-        )  # [nrays, n_K, 1]
-        topK_ray_pitch = torch.acos(topK_ray_cospitch)  # [nrays, n_K, 1]
-        topK_ray_sinpitch = torch.sqrt(1.0 - topK_ray_cospitch * topK_ray_cospitch)
+        topK_ray_sinphi = torch.sqrt(1.0 - topK_ray_cosphi * topK_ray_cosphi)
         topK_ray_distance = ((topK_points - ray_o) * (topK_points - ray_o)).sum(
             dim=-1, keepdim=True
-        ) * topK_ray_sinpitch
+        ) * topK_ray_sinphi
 
-        # TODO: this is not as same as the original code
-        topK_ray_up = y_axis - torch.sum(y_axis * ray_d, axis=-1, keepdim=True) * ray_d
-        topK_ray_up = F.normalize(topK_ray_up, dim=-1)
-        topK_ray_to_points_vector = topK_points - (ray_o + topK_ray_walk * ray_d)
-        topK_ray_to_points_vector_projected = F.normalize(
-            topK_ray_to_points_vector
-            - torch.sum(topK_ray_to_points_vector * ray_d, axis=-1, keepdim=True)
-            * ray_d,
-            dim=-1,
+        # Take the formula from reference
+        topK_y = y_axis - (y_axis * ray_d).sum(dim=-1, keepdim=True) * ray_d
+        topK_y = F.normalize(topK_y, dim=-1)  # [n_rays, 1, 3]
+        topK_proj_coord_x = (topK_y * topK_points).sum(dim=-1, keepdim=True)
+        topK_proj_coord_y = (ray_d.cross(topK_y, dim=-1) * topK_points).sum(
+            dim=-1, keepdim=True
         )
-        topK_ray_azimuth = torch.sum(
-            topK_ray_to_points_vector_projected * topK_ray_up, dim=-1, keepdim=True
+        topK_ray_proj_distance = torch.sqrt(
+            topK_proj_coord_x * topK_proj_coord_x
+            + topK_proj_coord_y * topK_proj_coord_y
+        )
+        topK_ray_azimuth = torch.arctan(topK_proj_coord_x / topK_proj_coord_y)
+        topK_ray_pitch = torch.arccos(
+            (ray_d * F.normalize(topK_points, dim=-1)).sum(dim=-1, keepdim=True)
         )
 
         return [
             topK_indices.unsqueeze(-1),
             topK_points,
             topK_ray_distance,
-            topK_ray_walk,
+            topK_ray_proj_distance,
             topK_ray_azimuth,
             topK_ray_pitch,
         ]
