@@ -79,7 +79,8 @@ class Splatter(nn.Module):
                         dtype=torch.int,
                     )
                     for _ in range(self.ndim)
-                ]
+                ],
+                indexing="ij",
             ),
             dim=-1,
         )

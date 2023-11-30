@@ -69,15 +69,13 @@ class RaySampler(nn.Module):
         self.device = device
         self.dtype = dtype
 
-        self._local_sampler = RayAABBIntersection(device=device, dtype=dtype)
-
     def forward(
         self,
-        idx: int,
         scene: AbstractScene,
+        env_idx: int,
+        tx_idx: int,
+        rx_idx: int,
         train_type: int = 0,
-        env_idx: int = None,
-        tx_idx: int = None,
     ) -> List[torch.Tensor]:
         """
         Args:
@@ -97,17 +95,13 @@ class RaySampler(nn.Module):
                 topK_indices:  [n_rays, K_closest, 1]---- points_clouds[(linspace, topK_indices.flatten().tolist())] = selected_points
                 gt_channels:   [n_rays, D=3]------------- ground truth of wireless channels
         """
-        n_envs = scene.GetNumEnvs(train_type=train_type)
-        n_transmitters = scene.GetNumTransmitters(train_type=train_type)
-        n_receivers = scene.GetNumReceivers(train_type=train_type)
 
         # 1. Generate rays.
         # [F, T, 1, R, K, I, 4] Intersection
         # [F, T, 1, R, D=8, K] channels
         # [F, T, 1, R, 3] rx
-        ch, floor_idx, interactions, rx, tx = scene.GetData(train_type)
+        ch, _, rx, _ = scene.GetData(train_type)
         # Please note the ray is actually all shot from tx
-        # ray_o = interactions[..., 0, 1:]  # [F, T, 1, R, K, 3], TODO: tx->bounce->rx
         ray_o = rx
         ray_azimuth = ch[..., 5, :]  # [F, T, 1, R, K]
         ray_elevation = ch[..., 6, :]  # [F, T, 1, R, K]
@@ -119,36 +113,25 @@ class RaySampler(nn.Module):
             ),
             dim=-1,
         )  # [F, T, 1, R, K, 3]
-        ray_dest = rx
 
         n_rays = ray_d.shape[-2]
         ray_o_detach = ray_o.detach()
         ray_d_detach = ray_d.detach()
-        ray_dest_detach = ray_dest.detach()
 
-        # 2. We got many Transmitters, and many Receivers.
-        idx = idx % (n_envs * n_transmitters * n_receivers)
-        env_idx = idx // (n_transmitters * n_receivers) if env_idx is None else env_idx
-        idx = idx % (n_transmitters * n_receivers)
-        tx_idx = idx // n_receivers if tx_idx is None else tx_idx
-        rx_idx = idx % n_receivers
-        # Load related object/ Point clouds firstly
+        # 2. Load related object/ Point clouds firstly
         point_clouds = scene.GetPointCloud(env_index=env_idx).reshape(-1, 3)
         # Before everything, find the intersections
 
         ray_o_input = ray_o_detach[env_idx, tx_idx, 0, rx_idx, :].view(1, 3)  # [1, 3]
         ray_d_input = ray_d_detach[env_idx, tx_idx, 0, rx_idx, :, :]  # [n_rays, 3]
-        ray_dest_input = ray_dest_detach[env_idx, tx_idx, 0:1, rx_idx, :].repeat(
-            n_rays, 1
-        )  # [n_rays, 3]
         (
             topK_indices,
-            points,
             distance,
             proj_distance,
             azimuth,
             pitch,
-        ) = scene.GetTransmitter(
+            sky_mask,
+        ) = scene.GetReceiver(
             transmitter_idx=tx_idx, receiver_idx=rx_idx, train_type=train_type
         ).FindKClosest(
             ray_o=ray_o_input,
@@ -162,23 +145,17 @@ class RaySampler(nn.Module):
             ch[env_idx, tx_idx, 0, rx_idx, :, :], -2, -1
         )  # [n_rays, 8]
 
-        ray_info = torch.cat(
-            (ray_o_input.repeat(n_rays, 1), ray_d_input, ray_dest_input), dim=-1
-        )
-        points_info = torch.cat(
-            (points, distance, proj_distance, azimuth, pitch), dim=-1
-        )
+        ray_info = torch.cat((ray_o_input.repeat(n_rays, 1), ray_d_input), dim=-1)
+        points_info = torch.cat((distance, proj_distance, azimuth, pitch), dim=-1)
 
         eps = 1e-6
-        valid_rays = (
-            interactions[env_idx, tx_idx, 0, rx_idx, :, :, :]
-            .abs()
-            .sum(dim=-2)
-            .sum(dim=-1, keepdim=True)
-            > eps
-        ).to(
+        valid_rays = ch[env_idx, tx_idx, 0, rx_idx, 7:8, :].to(
             torch.bool
         )  # [n_rays, 1]
+        transmitter = scene.GetTransmitter(
+            transmitter_idx=tx_idx, train_type=train_type
+        )
+        tx_info = transmitter.Decompose(points=point_clouds)
 
         return (
             point_clouds,
@@ -186,5 +163,7 @@ class RaySampler(nn.Module):
             points_info,
             topK_indices,
             valid_rays,
+            sky_mask,
+            tx_info,
             gt_channels,
         )

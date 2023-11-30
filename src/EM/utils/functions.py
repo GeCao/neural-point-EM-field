@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import scipy.stats as st
-from typing import Tuple, List
+from typing import Tuple, List, Union
 
 from src.EM.utils import Splatter
 from src.EM.utils import Linear, Quadratic
@@ -17,8 +17,8 @@ def ScaleToUintCube(points: torch.Tensor, scale: float = 1.0 / 1.4):
     batch_size = points.shape[0] if points.dim() == 3 else 1
     dim = 3
 
-    AABB_min, _ = points.view(batch_size, -1, dim).min(dim=1, keepdim=True)  # [B, 3]
-    AABB_max, _ = points.view(batch_size, -1, dim).max(dim=1, keepdim=True)  # [B, 3]
+    AABB_min, _ = points.view(batch_size, -1, dim).min(dim=1, keepdim=True)  # [B, 1, 3]
+    AABB_max, _ = points.view(batch_size, -1, dim).max(dim=1, keepdim=True)  # [B, 1, 3]
 
     scaled_points = (points - AABB_min) * 2 * torch.reciprocal(
         AABB_max - AABB_min
@@ -162,22 +162,25 @@ def ApplyPositionBasedKernel(
     for i in range(kernel_size):
         for j in range(kernel_size):
             index_ij = ([ele + i for ele in index[0]], [ele + j for ele in index[1]])
-            grid_pad[index_ij] += gain
+            grid_pad[index_ij] += gain * kernel[0, 0, i, j]
     grid_pad = grid_pad.reshape(1, 1, *grid_pad.shape[-2:])
-    output = torch.conv2d(input=grid_pad, weight=kernel)
+    # output = torch.conv2d(input=grid_pad, weight=kernel)
+    output = grid_pad[:, :, r:-r, r:-r]
     return output
 
 
 def DrawHeatMapReceivers(
     rx: torch.Tensor,
+    tx: torch.Tensor,
     gain: torch.Tensor,
     radius: float = None,
     res_x: int = 1024,
     res_y: int = None,
-) -> torch.Tensor:
+) -> List[torch.Tensor]:
     """
     Args:
         rx   (torch.Tensor): [R, 3]
+        tx   (torch.Tensor): [3]
         gain (torch.Tensor): [R, 1]
     """
     device = gain.device
@@ -186,19 +189,19 @@ def DrawHeatMapReceivers(
     rx_proj = rx[:, 0:2]  # [R, 2]
     rx_AABB_min, _ = rx_proj.min(dim=0, keepdim=True)  # [1, 2]
     rx_AABB_max, _ = rx_proj.max(dim=0, keepdim=True)  # [1, 2]
-    AABB_length = rx_AABB_max[0] - rx_AABB_min[0]
+    AABB_length = rx_AABB_max - rx_AABB_min  # [1, 2]
     rx_proj = (rx_proj - rx_AABB_min) / AABB_length  # [R, 2]
 
     if radius is None:
         radius = int(math.sqrt(1.0 / rx_proj.shape[0] / math.pi))
 
     if res_y is None:
-        width = AABB_length[0]
-        height = AABB_length[1]
+        width = AABB_length[0, 0]
+        height = AABB_length[0, 1]
         aspect = float(width / height)
         res_y = math.ceil(res_x / aspect)
     H, W = res_y, res_x
-    r = 20
+    r = 10
     grid = torch.zeros((1, 1, H, W)).to(dtype).to(device)
     gs_kernel = gkern(kernlen=2 * r + 1, device=device, dtype=dtype)
     gs_kernel = gs_kernel.reshape(1, 1, 2 * r + 1, 2 * r + 1)
@@ -211,7 +214,15 @@ def DrawHeatMapReceivers(
         grid=grid, kernel=gs_kernel, grid_pos=rx_proj, gain=gain
     )
 
-    return grid
+    if tx is not None:
+        tx_proj = tx.reshape(-1, 3)[:, 0:2]
+        tx_proj = (tx_proj - rx_AABB_min) / AABB_length
+        tx_proj[:, 0] *= W
+        tx_proj[:, 1] *= H
+    else:
+        tx_proj = None
+
+    return [grid, tx_proj]
 
 
 def DeleteFloorOrCeil(

@@ -2,22 +2,26 @@ from abc import ABC, abstractmethod
 from typing import Dict, List
 import torch
 
-from src.EM.scenes import Camera
+from src.EM.scenes import Camera, Transmitter
 
 
 class AbstractScene(ABC):
     @abstractmethod
-    def GetFrames(self):
+    def GetReceivers(self, train_type: int) -> List[List[Camera]]:
         ...
 
     @abstractmethod
-    def GetTransmitters(self) -> List[List[Camera]]:
-        ...
-
-    @abstractmethod
-    def GetTransmitter(
+    def GetReceiver(
         self, transmitter_idx: int, receiver_idx: int, train_type: int
     ) -> Camera:
+        ...
+
+    @abstractmethod
+    def GetTransmitters(self, train_type: int) -> List[Transmitter]:
+        ...
+
+    @abstractmethod
+    def GetTransmitter(self, transmitter_idx: int, train_type: int) -> Transmitter:
         ...
 
     @abstractmethod

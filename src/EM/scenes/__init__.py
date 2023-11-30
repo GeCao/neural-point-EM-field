@@ -1,5 +1,5 @@
 from .camera import Camera
+from .transmitter import Transmitter
 from .abstract_scene import AbstractScene
-from .frame import Frame
 from .ray_sampler import RaySampler
 from .scene import NeuralScene

@@ -64,22 +64,23 @@ class PointLightFieldRenderer(nn.Module):
         ray_info: torch.Tensor,
         pts_info: torch.Tensor,
         K_closest_mask: Tuple[List[int]],
+        sky_mask: torch.Tensor,
+        tx_info: torch.Tensor,
     ):
         if self.training:
             # Do not over hierachy
             # exert light_field_module
             # x                           [B, n_pts, 3]
             if pts_info.dim() == 3:
-                pts_info = pts_info.unsqueeze(0)  # [1, selected_rays, K_closest, 7]
+                pts_info = pts_info.unsqueeze(0)  # [1, selected_rays, K_closest, 4]
             if ray_info.dim() == 2:
                 ray_info = ray_info.unsqueeze(0)  # [1, selected_rays, 3]
 
             ray_d = ray_info[..., 3:6]  # [B, n_rays, 3]
-            pts_positions = pts_info[..., 0:3]  # [B, n_rays, K, 3]
-            pts_distance = pts_info[..., 3:4]  # [B, n_rays, K, 1]
-            pts_proj_distance = pts_info[..., 4:5]  # [B, n_rays, K, 1]
-            pts_azimuth = pts_info[..., 5:6]  # [B, n_rays, K, 1]
-            pts_pitch = pts_info[..., 6:7]  # [B, n_rays, K, 1]
+            pts_distance = pts_info[..., 0:1]  # [B, n_rays, K, 1]
+            pts_proj_distance = pts_info[..., 1:2]  # [B, n_rays, K, 1]
+            pts_azimuth = pts_info[..., 2:3]  # [B, n_rays, K, 1]
+            pts_pitch = pts_info[..., 3:4]  # [B, n_rays, K, 1]
             # K_closest_mask                  x[mask] -> Shape[B*n_rays*n_pts, 3]
             for module_name, module in self.named_modules():
                 if isinstance(module, PointLightField):
@@ -91,6 +92,8 @@ class PointLightFieldRenderer(nn.Module):
                         pts_proj_distance=pts_proj_distance,
                         pts_pitch=pts_pitch,
                         pts_azimuth=pts_azimuth,
+                        sky_mask=sky_mask,
+                        tx_info=tx_info,
                     )
                     return prediction
                 else:

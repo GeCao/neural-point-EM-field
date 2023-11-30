@@ -18,31 +18,26 @@ class SceneDataSet(Dataset):
 
         self.num_envs = self.scene.GetNumEnvs(self.train_type)
         self.num_tx = self.scene.GetNumTransmitters(self.train_type)
+        if train_type != int(TrainType.TRAIN):
+            self.num_tx = 1
         self.num_rx = self.scene.GetNumReceivers(self.train_type)
         self.length = self.num_envs * self.num_tx * self.num_rx
-        if train_type != int(TrainType.TRAIN):
-            self.length = self.num_rx
-
-        self.env_idx = 0
-        self.tx_idx = 0
 
     def __len__(self) -> int:
         return self.length
 
-    def step(self):
-        tx_idx = self.tx_idx + 1
-        env_idx = self.env_idx + tx_idx
-
-        self.tx_idx = tx_idx % self.num_tx
-        self.env_idx = env_idx % self.num_envs
-
     def __getitem__(self, index: int) -> List[torch.Tensor]:
         with torch.no_grad():
             # points, distance, proj_distance, pitch, azimuth
-            env_idx = self.env_idx if self.train_type != int(TrainType.TRAIN) else None
-            tx_idx = self.tx_idx if self.train_type != int(TrainType.TRAIN) else None
+            env_idx = index // (self.num_tx * self.num_rx)
+            tx_idx = (index % (self.num_tx * self.num_rx)) // self.num_rx
+            rx_idx = (index % (self.num_tx * self.num_rx)) % self.num_rx
+
             return self.scene.RaySample(
-                idx=index, train_type=self.train_type, env_idx=env_idx, tx_idx=tx_idx
+                env_idx=env_idx,
+                tx_idx=tx_idx,
+                rx_idx=rx_idx,
+                train_type=self.train_type,
             )
 
 
@@ -116,21 +111,17 @@ class DataManager(object):
                     data["channels"][0:1, ...]
                 )  # [F, T, 1, R, D=8, K], float32
                 floor_idx = np.array(data["floor_idx"][0:1, ...])  # [3, ], int32
-                interactions = np.array(
-                    data["interactions"][0:1, ...]
-                )  # [F, T, 1, R, K, I, 4]
                 rx = np.array(data["rx"][0:1, ...])  # [F, T, 1, R, dim=3]
                 tx = np.array(data["tx"][0:1, ...])  # [F, T, dim=3]
 
                 if result[target_name] is None:
-                    result[target_name] = [ch, floor_idx, interactions, rx, tx]
+                    result[target_name] = [ch, floor_idx, rx, tx]
                 else:
                     tensors = [
                         np.concatenate((result[target_name][0], ch), axis=0),
                         np.concatenate((result[target_name][1], floor_idx), axis=0),
-                        np.concatenate((result[target_name][2], interactions), axis=0),
-                        np.concatenate((result[target_name][3], rx), axis=0),
-                        np.concatenate((result[target_name][4], tx), axis=0),
+                        np.concatenate((result[target_name][2], rx), axis=0),
+                        np.concatenate((result[target_name][3], tx), axis=0),
                     ]
                     result[target_name] = tensors
 

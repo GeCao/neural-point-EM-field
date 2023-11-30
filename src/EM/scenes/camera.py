@@ -37,8 +37,8 @@ class Camera(object):
         self.near = near
         self.far = far
 
-        self.P_mat = self.ConstructPerspectiveMatrix()
-        self.V_mat = self.ConstructViewMatrix()
+        self.P_mat = None
+        self.V_mat = None
 
     def GetViewMatrix(self) -> torch.Tensor:
         if self.V_mat is None:
@@ -178,8 +178,8 @@ class Camera(object):
         n_pts = points.shape[-2]
         n_rays = ray_d.shape[0]
 
-        negz_axis = F.normalize(self.lookat - self.eye, dim=-1)
-        y_axis = self.up  # Cannot always ensure indicated z, y ortho
+        negz_axis = ray_d
+        y_axis = self.up.reshape(1, 1, 3)  # Cannot always ensure indicated z, y ortho
         x_axis = F.normalize(torch.cross(y_axis, -negz_axis, dim=-1), dim=-1)
         y_axis = F.normalize(torch.cross(x_axis, negz_axis, dim=-1), dim=-1)
 
@@ -195,19 +195,10 @@ class Camera(object):
         in_frustum_mask = self.FrustumCulling(points=points, ray_o=ray_o, ray_d=ray_d)
         assert len(in_frustum_mask.shape) == 2
 
-        # Frumstum culling: fill outside-frustum distance with a big value
-        far_val = ray_distance.max() * 2
-        ray_distance_with_farval = torch.where(
-            in_frustum_mask, ray_distance, far_val * torch.ones_like(ray_distance)
-        )
-        valid_ray_mask = (
-            (in_frustum_mask.sum(dim=1, keepdim=True) > K_closest)
-            .to(torch.bool)
-            .repeat(1, n_pts)
-        )
-        ray_distance = torch.where(
-            valid_ray_mask, ray_distance_with_farval, ray_distance
-        )
+        sky_mask = (in_frustum_mask.sum(dim=1) < 1).to(torch.bool)
+        ray_distance = torch.cross(points - ray_o, ray_d, dim=-1).norm(
+            dim=-1
+        )  # [nrays, npts,]
 
         # Find topK
         index = None
@@ -215,22 +206,16 @@ class Camera(object):
             topK_ray_distance, topK_indices = torch.topk(
                 input=ray_distance, k=K_closest, largest=False, dim=-1
             )  # [n_rays, n_K]
-            cirtera = far_val * 0.75
-            topK_indices = torch.where(
-                topK_ray_distance < cirtera,
-                topK_indices,
-                topK_indices[:, 0:1].repeat(1, K_closest),
-            )
+            topK_indices = topK_indices.to(torch.device("cpu"))
             index = (
                 torch.linspace(
-                    0, n_rays - 1, n_rays, device=ray_d.device, dtype=torch.int32
+                    0, n_rays - 1, n_rays, device=torch.device("cpu"), dtype=torch.int32
                 )
                 .unsqueeze(-1)
                 .repeat(1, K_closest)
                 .flatten()
-                .cpu()
                 .tolist(),
-                topK_indices.flatten().cpu().tolist(),
+                topK_indices.flatten().tolist(),
             )
         else:
             raise RuntimeError(
@@ -243,6 +228,7 @@ class Camera(object):
         topK_ray_cosphi = (F.normalize(topK_points - ray_o, dim=-1) * ray_d).sum(
             dim=-1, keepdim=True
         )  # [nrays, n_K, 1]
+        topK_ray_cosphi = torch.clamp(topK_ray_cosphi, -1.0, 1.0)
         topK_ray_sinphi = torch.sqrt(1.0 - topK_ray_cosphi * topK_ray_cosphi)
         topK_ray_distance = ((topK_points - ray_o) * (topK_points - ray_o)).sum(
             dim=-1, keepdim=True
@@ -255,10 +241,13 @@ class Camera(object):
         topK_proj_coord_y = (ray_d.cross(topK_y, dim=-1) * topK_points).sum(
             dim=-1, keepdim=True
         )
-        topK_ray_proj_distance = torch.sqrt(
-            topK_proj_coord_x * topK_proj_coord_x
-            + topK_proj_coord_y * topK_proj_coord_y
-        )
+        # topK_ray_proj_distance = torch.sqrt(
+        #     topK_proj_coord_x * topK_proj_coord_x
+        #     + topK_proj_coord_y * topK_proj_coord_y
+        # )
+        topK_ray_proj_distance = ((topK_points - ray_o) * (topK_points - ray_o)).sum(
+            dim=-1, keepdim=True
+        ) * topK_ray_cosphi
         topK_ray_azimuth = torch.arctan(topK_proj_coord_x / topK_proj_coord_y)
         topK_ray_pitch = torch.arccos(
             (ray_d * F.normalize(topK_points, dim=-1)).sum(dim=-1, keepdim=True)
@@ -266,9 +255,9 @@ class Camera(object):
 
         return [
             topK_indices.unsqueeze(-1),
-            topK_points,
             topK_ray_distance,
             topK_ray_proj_distance,
             topK_ray_azimuth,
             topK_ray_pitch,
+            sky_mask,
         ]

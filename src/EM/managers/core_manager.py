@@ -4,6 +4,7 @@ import torch
 import cv2
 from typing import Dict
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 from pytorch3d.structures import Meshes
 
 from src.EM.managers import AbstractManager, LogManager, DataManager
@@ -11,8 +12,8 @@ from src.EM.utils import (
     mkdir,
     RenderRoom,
     DrawHeatMapReceivers,
-    ExportVTKFile,
-    FromGridToColor,
+    SplatFromParticlesToGrid,
+    DumpGrayFigureToRGB,
     DeleteFloorOrCeil,
     LoadPointCloudFromMesh,
 )
@@ -84,10 +85,9 @@ class CoreManager(AbstractManager):
                 )
 
                 if epoch % 10 == 0:
-                    env_idx = self.model.test_dataloader.dataset.env_idx
-                    meshes = self.scene.meshes
-                    verts = meshes.verts_list()[env_idx]
-                    faces = meshes.faces_list()[env_idx]
+                    env_idx = 0
+                    verts = self.scene.meshes.verts_list()[env_idx]
+                    faces = self.scene.meshes.faces_list()[env_idx]
                     verts, faces = DeleteFloorOrCeil(
                         verts=verts, faces=faces, axis=2, mode="both"
                     )
@@ -96,36 +96,51 @@ class CoreManager(AbstractManager):
                         faces=faces.unsqueeze(0),
                         textures=None,
                     )
-                    point_clouds = LoadPointCloudFromMesh(
+                    pts = LoadPointCloudFromMesh(
                         meshes=meshes, num_pts_samples=1000
                     )  # [F, n_pts, 3]
-                    rendered_room = RenderRoom(point_clouds[env_idx], res_x=1024)
-                    pred_color = DrawHeatMapReceivers(
-                        rx=rx_pos,
-                        gain=predicted_gains,
+                    rendered_room = RenderRoom(pts[env_idx], res_x=256)
+                    # pred_color, _ = DrawHeatMapReceivers(
+                    #     rx=rx_pos,
+                    #     tx=None,
+                    #     gain=predicted_gains,
+                    #     res_x=rendered_room.shape[1],
+                    #     res_y=rendered_room.shape[0],
+                    # )
+                    # gt_color, _ = DrawHeatMapReceivers(
+                    #     rx=rx_pos,
+                    #     tx=None,
+                    #     gain=gt_gains,
+                    #     res_x=rendered_room.shape[1],
+                    #     res_y=rendered_room.shape[0],
+                    # )
+                    predicted_gains = predicted_gains.abs()
+                    pred_color = SplatFromParticlesToGrid(
+                        particles=rx_pos[..., 0:2],
+                        attributes=predicted_gains,
                         res_x=rendered_room.shape[1],
                         res_y=rendered_room.shape[0],
                     )
-                    gt_color = DrawHeatMapReceivers(
-                        rx=rx_pos,
-                        gain=gt_gains,
+                    gt_gains = gt_gains.abs()
+                    gt_color = SplatFromParticlesToGrid(
+                        particles=rx_pos[..., 0:2],
+                        attributes=gt_gains,
                         res_x=rendered_room.shape[1],
                         res_y=rendered_room.shape[0],
+                    )
+                    rendered_room = SplatFromParticlesToGrid(
+                        particles=pts[env_idx, :, 0:2],
+                        attributes=torch.ones_like(pts[env_idx, :, 0:1]),
+                        res_x=rendered_room.shape[1],
+                        res_y=rendered_room.shape[0],
+                    )
+                    rendered_room = (rendered_room - rendered_room.min()) / (
+                        rendered_room.max() - rendered_room.min()
                     )
 
                     grid_min, grid_max = gt_color.min(), gt_color.max()
-
                     pred_color = (pred_color - grid_min) / (grid_max - grid_min)
-                    pred_color = FromGridToColor(grid=pred_color)  # [H, W, 3]
-
                     gt_color = (gt_color - grid_min) / (grid_max - grid_min)
-                    gt_color = FromGridToColor(grid=gt_color)  # [H, W, 3]
-
-                    pred_color[rendered_room.repeat(1, 1, 3) > 10] = 0.0
-                    gt_color[rendered_room.repeat(1, 1, 3) > 10] = 0.0
-                    gt_color = gt_color.cpu().numpy()
-                    pred_color = pred_color.cpu().numpy()
-                    rendered_room = rendered_room.cpu().numpy()
 
                     save_dir = os.path.join(self._save_path, "imgs")
                     mkdir(save_dir)
@@ -133,27 +148,18 @@ class CoreManager(AbstractManager):
                     save_path = os.path.join(
                         save_dir, f"pred_env{env_idx}_epoch{epoch}.png"
                     )
-                    cv2.imwrite(save_path, pred_color)
+                    DumpGrayFigureToRGB(
+                        save_path,
+                        pred_color,
+                        mask=rendered_room > 0.5,
+                        extra_spot=None,
+                    )
 
                     save_path = os.path.join(
                         save_dir, f"gt_env{env_idx}_epoch{epoch}.png"
                     )
-                    cv2.imwrite(save_path, gt_color)
-
-                    save_path = os.path.join(save_dir, f"pred_gain_{epoch}")
-                    ExportVTKFile(
-                        save_path=save_path,
-                        rx_pos=rx_pos,
-                        gain=predicted_gains,
-                        point_clouds=point_clouds[env_idx],
-                    )
-
-                    save_path = os.path.join(save_dir, f"gt_gain_epoch{epoch}")
-                    ExportVTKFile(
-                        save_path=save_path,
-                        rx_pos=rx_pos,
-                        gain=gt_gains,
-                        point_clouds=point_clouds[env_idx],
+                    DumpGrayFigureToRGB(
+                        save_path, gt_color, mask=rendered_room > 0.05, extra_spot=None
                     )
 
     def SaveCheckPoint(self, epoch: int, loss: float):

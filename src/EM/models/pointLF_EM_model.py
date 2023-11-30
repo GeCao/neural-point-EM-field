@@ -79,11 +79,13 @@ class PointLFEMModel(object):
             pts_info,
             K_closest_indices,
             valid_rays,
+            sky_mask,
+            tx_info,
             gt_ch,
         ) in self.train_dataloader:
             # Typically [B,         n_pts,     3          ] - x
             # Typically [B, n_rays,            (3+3      )] - ray_info
-            # Typically [B, n_rays, K_closest, (3+1+1+1+1)] - pts_info
+            # Typically [B, n_rays, K_closest, (1+1+1+1  )] - pts_info
             # Typically [B, n_rays,            1          ] - valid_rays
             # Typically [B, n_rays, K_closest, 1          ] - K_closest_indices
             # Typically [B, n_rays,            (3+2+2+1)  ] - gt_ch
@@ -100,17 +102,20 @@ class PointLFEMModel(object):
             # )[valid_rays]
             K_closest_mask = (
                 torch.linspace(
-                    0, Batch_size - 1, Batch_size, device=x.device, dtype=torch.int32
+                    0,
+                    Batch_size - 1,
+                    Batch_size,
+                    device=torch.device("cpu"),
+                    dtype=torch.int32,
                 )
                 .reshape(Batch_size, 1, 1)
                 .repeat(1, n_rays, K_closest)
                 .flatten()
-                .cpu()
                 .tolist(),
                 K_closest_indices.flatten().cpu().tolist(),
             )  # ([B*n_rays*K_closest], [B*n_rays*K_closest])
             predicted_ch = self.renderer.forward_on_batch(
-                x, ray_info, pts_info, K_closest_mask
+                x, ray_info, pts_info, K_closest_mask, sky_mask, tx_info
             )
             end_time = time.time()
 
@@ -128,13 +133,14 @@ class PointLFEMModel(object):
             predicted_gains = torch.zeros((0, 1)).to(self.device).to(self.dtype)
             gt_gains = torch.zeros((0, 1)).to(self.device).to(self.dtype)
             rx_pos = torch.zeros((0, 3)).to(self.device).to(self.dtype)
-            self.test_dataloader.dataset.step()
             for (
                 x,
                 ray_info,
                 pts_info,
                 K_closest_indices,
                 valid_rays,
+                sky_mask,
+                tx_info,
                 gt_ch,
             ) in self.test_dataloader:
                 Batch_size, n_rays, K_closest = K_closest_indices.shape[0:3]
@@ -151,18 +157,17 @@ class PointLFEMModel(object):
                         0,
                         Batch_size - 1,
                         Batch_size,
-                        device=x.device,
+                        device=torch.device("cpu"),
                         dtype=torch.int32,
                     )
                     .reshape(Batch_size, 1, 1)
                     .repeat(1, n_rays, K_closest)
                     .flatten()
-                    .cpu()
                     .tolist(),
                     K_closest_indices.flatten().cpu().tolist(),
                 )
                 predicted_ch = self.renderer.forward_on_batch(
-                    x, ray_info, pts_info, K_closest_mask
+                    x, ray_info, pts_info, K_closest_mask, sky_mask, tx_info
                 )
                 test_loss = self.loss(predicted_ch, gt_ch)
                 test_loss_list.append(test_loss.item())
@@ -191,7 +196,7 @@ class PointLFEMModel(object):
                 rx_pos = torch.cat(
                     (
                         rx_pos,
-                        ray_info.view(-1, ray_info.shape[-1])[:, 6:9],
+                        ray_info.view(-1, ray_info.shape[-1])[:, 0:3],
                     ),
                     dim=0,
                 )

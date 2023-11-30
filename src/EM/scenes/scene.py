@@ -4,7 +4,7 @@ from typing import Dict, Optional, List, Union
 from operator import itemgetter
 
 from src.EM.managers import AbstractManager
-from src.EM.scenes import AbstractScene, Frame, Camera, RaySampler
+from src.EM.scenes import AbstractScene, Transmitter, Camera, RaySampler
 from src.EM.utils import TrainType, LoadMeshes, LoadPointCloudFromMesh
 
 
@@ -33,11 +33,14 @@ class NeuralScene(AbstractScene):
         self.K_closest = scene_opt["lightfield"].get("k_closest", 8)
 
         self.meshes = LoadMeshes(
-            data_path=core_manager.GetDataPath(), device=device, dtype=dtype
+            data_path=core_manager.GetDataPath(),
+            device=torch.device("cpu"),
+            dtype=dtype,
         )
         self.point_clouds = LoadPointCloudFromMesh(
-            meshes=self.meshes, num_pts_samples=1000
+            meshes=self.meshes, num_pts_samples=3000
         )  # [F, n_pts, 3]
+        self.point_clouds = self.point_clouds.to(device)
         core_manager.InfoLog(
             f"Point Clouds loading finished, with shape={self.point_clouds.shape}"
         )
@@ -50,7 +53,7 @@ class NeuralScene(AbstractScene):
             int(TrainType.VALIDATION): [],
         }
         # Frames
-        self.frames = {
+        self.receivers = {
             int(TrainType.TRAIN): [],
             int(TrainType.TEST): [],
             int(TrainType.VALIDATION): [],
@@ -74,32 +77,28 @@ class NeuralScene(AbstractScene):
             for i in range(len(data["gendiag"]))
         ]
         train_data = [
-            train_data[0][:, 0:1, ...],
+            train_data[0][0:1, ...],
             train_data[1],
-            train_data[2][:, 0:1, ...],
-            train_data[3][:, 0:1, ...],
-            train_data[4][:, 0:1, ...],
+            train_data[2][0:1, ...],
+            train_data[3][0:1, ...],
         ]
         checkerboard_data = [
-            checkerboard_data[0][:, 0:1, ...],
+            checkerboard_data[0][0:1, ...],
             checkerboard_data[1],
-            checkerboard_data[2][:, 0:1, ...],
-            checkerboard_data[3][:, 0:1, ...],
-            checkerboard_data[4][:, 0:1, ...],
+            checkerboard_data[2][0:1, ...],
+            checkerboard_data[3][0:1, ...],
         ]
         genz_data = [
-            genz_data[0][:, 0:1, ...],
+            genz_data[0][0:1, ...],
             genz_data[1],
-            genz_data[2][:, 0:1, ...],
-            genz_data[3][:, 0:1, ...],
-            genz_data[4][:, 0:1, ...],
+            genz_data[2][0:1, ...],
+            genz_data[3][0:1, ...],
         ]
         gendiag_data = [
-            gendiag_data[0][:, 0:1, ...],
+            gendiag_data[0][0:1, ...],
             gendiag_data[1],
-            gendiag_data[2][:, 0:1, ...],
-            gendiag_data[3][:, 0:1, ...],
-            gendiag_data[4][:, 0:1, ...],
+            gendiag_data[2][0:1, ...],
+            gendiag_data[3][0:1, ...],
         ]
         data["train"] = train_data
         data["checkerboard"] = checkerboard_data
@@ -110,28 +109,25 @@ class NeuralScene(AbstractScene):
         self.nodes["test"] = data[core_manager.opt["test_target"]]
         self.nodes["validation"] = data[core_manager.opt["validation_target"]]
 
-        # [F, T, 1, R, K, I, 4] for interactions
-        _, _, train_interactions, _, _ = train_data
-        _, _, test_interactions, _, _ = self.nodes["test"]
-        _, _, validation_interactions, _, _ = self.nodes["validation"]
+        # [F, T, 1, R, D=8, n_rays] for ch
+        train_ch, _, _, _ = train_data
+        test_ch, _, _, _ = self.nodes["test"]
+        validation_ch, _, _, _ = self.nodes["validation"]
 
-        self.n_train_env = train_interactions.shape[0]  # F
-        self.n_train_transmitter = train_interactions.shape[1]  # T
-        self.n_train_receivers = train_interactions.shape[3]  # R
-        self.n_train_rays = train_interactions.shape[4]  # K
-        self.n_train_interactions = train_interactions.shape[5]  # I
+        self.n_train_env = train_ch.shape[0]  # F
+        self.n_train_transmitter = train_ch.shape[1]  # T
+        self.n_train_receivers = train_ch.shape[3]  # R
+        self.n_train_rays = train_ch.shape[5]  # n_rays
 
-        self.n_test_env = test_interactions.shape[0]  # F
-        self.n_test_transmitter = test_interactions.shape[1]  # T
-        self.n_test_receivers = test_interactions.shape[3]  # R
-        self.n_test_rays = test_interactions.shape[4]  # K
-        self.n_test_interactions = test_interactions.shape[5]  # I
+        self.n_test_env = test_ch.shape[0]  # F
+        self.n_test_transmitter = test_ch.shape[1]  # T
+        self.n_test_receivers = test_ch.shape[3]  # R
+        self.n_test_rays = test_ch.shape[4]  # n_rays
 
-        self.n_validation_env = validation_interactions.shape[0]  # F
-        self.n_validation_transmitter = validation_interactions.shape[1]  # T
-        self.n_validation_receivers = validation_interactions.shape[3]  # R
-        self.n_validation_rays = validation_interactions.shape[4]  # K
-        self.n_validation_interactions = validation_interactions.shape[5]  # I
+        self.n_validation_env = validation_ch.shape[0]  # F
+        self.n_validation_transmitter = validation_ch.shape[1]  # T
+        self.n_validation_receivers = validation_ch.shape[3]  # R
+        self.n_validation_rays = validation_ch.shape[4]  # n_rays
 
         self.ray_sampler = RaySampler(
             K_closest=self.K_closest,
@@ -143,9 +139,11 @@ class NeuralScene(AbstractScene):
         self.Initialization()
 
     def RaySample(
-        self, idx: int, train_type: int = 0, env_idx: int = None, tx_idx: int = None
+        self, env_idx: int, tx_idx: int, rx_idx: int, train_type: int = 0
     ) -> List[torch.Tensor]:
-        return self.ray_sampler(idx, self, train_type, env_idx=env_idx, tx_idx=tx_idx)
+        return self.ray_sampler(
+            self, env_idx=env_idx, tx_idx=tx_idx, rx_idx=rx_idx, train_type=train_type
+        )
 
     def Initialization(self):
         # Frames
@@ -154,25 +152,27 @@ class NeuralScene(AbstractScene):
             int(TrainType.TEST),
             int(TrainType.VALIDATION),
         ]
+        env_idx = 0
         for train_type in train_types:
-            _, _, _, _, tx_data = self.GetData(train_type=train_type)
+            _, _, rx_data, tx_data = self.GetData(train_type=train_type)
             n_transmitter = self.GetNumTransmitters(train_type=train_type)
             n_receivers = self.GetNumReceivers(train_type=train_type)
 
-            self.frames[train_type] = [
-                Frame(
-                    self,
-                    transmitter_index=tx_idx,
-                    env_index=0,
-                    object2world_mat=None,
+            self.transmitters[train_type] = [
+                Transmitter(
+                    source_location=tx_data[env_idx, tx_idx],
+                    device=self.device,
+                    dtype=self.dtype,
                 )
                 for tx_idx in range(n_transmitter)
             ]
 
-            self.transmitters[train_type] = [
+            self.receivers[train_type] = [
                 [
                     Camera(
-                        eye=tx_data[0, tx_idx, :], device=self.device, dtype=self.dtype
+                        eye=rx_data[env_idx, tx_idx, 0, rx_idx],
+                        device=self.device,
+                        dtype=self.dtype,
                     )
                     for rx_idx in range(n_receivers)
                 ]
@@ -195,16 +195,19 @@ class NeuralScene(AbstractScene):
                 f"while your intput is {train_type}, please take care of your input of scene dataset"
             )
 
-    def GetFrames(self) -> List[Frame]:
-        return self.frames
+    def GetReceivers(self, train_type: int) -> List[List[Camera]]:
+        return self.receivers[train_type]
 
-    def GetTransmitters(self) -> List[List[Camera]]:
-        return self.transmitters
-
-    def GetTransmitter(
+    def GetReceiver(
         self, transmitter_idx: int, receiver_idx: int, train_type: int
     ) -> Camera:
-        return self.transmitters[train_type][transmitter_idx][receiver_idx]
+        return self.receivers[train_type][transmitter_idx][receiver_idx]
+
+    def GetTransmitters(self, train_type: int) -> List[Transmitter]:
+        return self.transmitters[train_type]
+
+    def GetTransmitter(self, transmitter_idx: int, train_type: int) -> Transmitter:
+        return self.transmitters[train_type][transmitter_idx]
 
     def GetNumRays(self, train_type: int) -> int:
         if train_type == int(TrainType.TRAIN):

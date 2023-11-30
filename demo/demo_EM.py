@@ -36,8 +36,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set",
         type=str,
-        default="wi3rooms_0",
-        choices=["wiindoor, wi3rooms_0, wi3rooms_1"],
+        default="wiindoor",
+        choices=["wiindoor", "wi3rooms_0", "wi3rooms_1"],
         help="Train?",
     )
     parser.add_argument("--batch_size", type=int, default=128, help="Size of Batch")
@@ -47,7 +47,7 @@ if __name__ == "__main__":
         default=0,
         help="When sample data from dataset, indicate a number of work threads",
     )
-    parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
+    parser.add_argument("--lr", type=float, default=0.0001, help="learning rate")
     parser.add_argument(
         "--use_check_point", type=bool, default=True, help="Use Check Point?"
     )
