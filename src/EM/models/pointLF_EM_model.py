@@ -73,7 +73,7 @@ class PointLFEMModel(object):
 
         self.scene.InfoLog("Point Light Field Model fully prepared")
 
-    def train_on_scene(self, epoch: int) -> List[torch.Tensor]:
+    def train_on_scene(self, epoch: int) -> float:
         self.renderer.train()  # Set train flags as true
 
         loss_list = []
@@ -131,6 +131,12 @@ class PointLFEMModel(object):
             # self.scene.log_manager.WriterAddScalar("loss", loss, epoch)
 
             loss_list.append(loss.item())
+
+        mean_loss = np.array(loss_list).mean()
+        return mean_loss
+
+    def validation_on_scene(self) -> List[torch.Tensor]:
+        self.renderer.train()  # Set train flags as true
 
         with torch.no_grad():
             test_loss_list = []
@@ -205,9 +211,8 @@ class PointLFEMModel(object):
                     dim=0,
                 )
 
-        mean_loss = np.array(loss_list).mean()
         mean_test_loss = np.array(test_loss_list).mean()
-        return [mean_loss, mean_test_loss, rx_pos, predicted_gains, gt_gains]
+        return [mean_test_loss, rx_pos, predicted_gains, gt_gains]
 
     def GetOptimizer(self):
         return self.optimizer

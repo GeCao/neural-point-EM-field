@@ -53,28 +53,33 @@ class CoreManager(AbstractManager):
 
         self.is_training = opt.get("is_training")
         self.use_check_point = opt.get("use_check_point")
+        self.save_check_point = opt.get("save_check_point")
 
     def Initialization(self):
         self._data_manager.Initialization()
-        if self.opt["use_check_point"]:
-            success = self.LoadCheckPoint()
 
     def run(self):
         seed = 42
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
+        if self.opt["use_check_point"] or not self.is_training:
+            success = self.LoadCheckPoint()
+
         if self.is_training:
             self.InfoLog("Start Training with parameters: {}".format(self.opt))
             total_steps = self.opt["total_steps"]
             for epoch in tqdm(range(self.start_epoch, total_steps)):
+                # Train:
+                loss = self.model.train_on_scene(epoch=epoch)
+
+                # Validation:
                 (
-                    loss,
                     test_loss,
                     rx_pos,
                     predicted_gains,
                     gt_gains,
-                ) = self.model.train_on_scene(epoch=epoch)
+                ) = self.model.validation_on_scene()
 
                 self._log_manager.WriterAddScalar("train_loss", loss, epoch)
                 self._log_manager.WriterAddScalar("test_loss", test_loss, epoch)
@@ -83,135 +88,149 @@ class CoreManager(AbstractManager):
                 )
 
                 if epoch % 10 == 0:
-                    env_idx = 0
-                    verts = self.scene.meshes.verts_list()[env_idx]
-                    faces = self.scene.meshes.faces_list()[env_idx]
-                    verts, faces = DeleteFloorOrCeil(
-                        verts=verts, faces=faces, axis=2, mode="both"
-                    )
-                    meshes = Meshes(
-                        verts=verts.unsqueeze(0),
-                        faces=faces.unsqueeze(0),
-                        textures=None,
-                    )
-                    pts = LoadPointCloudFromMesh(
-                        meshes=meshes, num_pts_samples=1000
-                    )  # [F, n_pts, 3]
-                    rendered_room = RenderRoom(pts[env_idx], res_x=256)
-                    predicted_gains = predicted_gains.abs()
-                    pred_color = SplatFromParticlesToGrid(
-                        particles=rx_pos[..., 0:2],
-                        attributes=predicted_gains,
-                        res_x=rendered_room.shape[1],
-                        res_y=rendered_room.shape[0],
-                    )
-                    gt_gains = gt_gains.abs()
-                    gt_color = SplatFromParticlesToGrid(
-                        particles=rx_pos[..., 0:2],
-                        attributes=gt_gains,
-                        res_x=rendered_room.shape[1],
-                        res_y=rendered_room.shape[0],
-                    )
-                    rendered_room = SplatFromParticlesToGrid(
-                        particles=pts[env_idx, :, 0:2],
-                        attributes=torch.ones_like(pts[env_idx, :, 0:1]),
-                        res_x=rendered_room.shape[1],
-                        res_y=rendered_room.shape[0],
-                    )
-                    rendered_room = (rendered_room - rendered_room.min()) / (
-                        rendered_room.max() - rendered_room.min()
+                    self.validation_vis(
+                        epoch=epoch,
+                        rx_pos=rx_pos,
+                        predicted_gains=predicted_gains,
+                        gt_gains=gt_gains,
                     )
 
-                    grid_min, grid_max = gt_color.min(), gt_color.max()
-                    pred_color = (pred_color - grid_min) / (grid_max - grid_min)
-                    gt_color = (gt_color - grid_min) / (grid_max - grid_min)
+                    if self.save_check_point:
+                        self.SaveCheckPoint(epoch=epoch, loss=loss.item())
+        else:
+            # Validation:
+            (
+                test_loss,
+                rx_pos,
+                predicted_gains,
+                gt_gains,
+            ) = self.model.validation_on_scene()
 
-                    save_dir = os.path.join(self._save_path, "imgs")
-                    mkdir(save_dir)
+            self.validation_vis(
+                epoch=epoch,
+                rx_pos=rx_pos,
+                predicted_gains=predicted_gains,
+                gt_gains=gt_gains,
+            )
 
-                    save_path = os.path.join(
-                        save_dir, f"pred_env{env_idx}_epoch{epoch}.png"
-                    )
-                    DumpGrayFigureToRGB(
-                        save_path,
-                        pred_color,
-                        mask=rendered_room > 0.5,
-                        extra_spot=None,
-                    )
+    def validation_vis(
+        self,
+        epoch: int,
+        rx_pos: torch.Tensor,
+        predicted_gains: torch.Tensor,
+        gt_gains: torch.Tensor,
+    ):
+        env_idx = 0
+        verts = self.scene.meshes.verts_list()[env_idx]
+        faces = self.scene.meshes.faces_list()[env_idx]
+        verts, faces = DeleteFloorOrCeil(verts=verts, faces=faces, axis=2, mode="both")
+        meshes = Meshes(
+            verts=verts.unsqueeze(0),
+            faces=faces.unsqueeze(0),
+            textures=None,
+        )
+        pts = LoadPointCloudFromMesh(
+            meshes=meshes, num_pts_samples=1000
+        )  # [F, n_pts, 3]
+        rendered_room = RenderRoom(pts[env_idx], res_x=256)
+        predicted_gains = predicted_gains.abs()
+        pred_color = SplatFromParticlesToGrid(
+            particles=rx_pos[..., 0:2],
+            attributes=predicted_gains,
+            res_x=rendered_room.shape[1],
+            res_y=rendered_room.shape[0],
+        )
+        gt_gains = gt_gains.abs()
+        gt_color = SplatFromParticlesToGrid(
+            particles=rx_pos[..., 0:2],
+            attributes=gt_gains,
+            res_x=rendered_room.shape[1],
+            res_y=rendered_room.shape[0],
+        )
+        rendered_room = SplatFromParticlesToGrid(
+            particles=pts[env_idx, :, 0:2],
+            attributes=torch.ones_like(pts[env_idx, :, 0:1]),
+            res_x=rendered_room.shape[1],
+            res_y=rendered_room.shape[0],
+        )
+        rendered_room = (rendered_room - rendered_room.min()) / (
+            rendered_room.max() - rendered_room.min()
+        )
 
-                    save_path = os.path.join(
-                        save_dir, f"gt_env{env_idx}_epoch{epoch}.png"
-                    )
-                    DumpGrayFigureToRGB(
-                        save_path, gt_color, mask=rendered_room > 0.05, extra_spot=None
-                    )
+        grid_min, grid_max = gt_color.min(), gt_color.max()
+        pred_color = (pred_color - grid_min) / (grid_max - grid_min)
+        gt_color = (gt_color - grid_min) / (grid_max - grid_min)
+
+        save_dir = os.path.join(self._save_path, "imgs")
+        mkdir(save_dir)
+
+        if epoch is not None:
+            save_path = os.path.join(save_dir, f"pred_env{env_idx}_epoch{epoch}.png")
+        else:
+            save_path = os.path.join(save_dir, f"pred_env{env_idx}_validation.png")
+        DumpGrayFigureToRGB(
+            save_path,
+            pred_color,
+            mask=rendered_room > 0.8,
+            extra_spot=None,
+        )
+
+        if epoch is not None:
+            save_path = os.path.join(save_dir, f"gt_env{env_idx}_epoch{epoch}.png")
+        else:
+            save_path = os.path.join(save_dir, f"gt_env{env_idx}_validation.png")
+        DumpGrayFigureToRGB(
+            save_path, gt_color, mask=rendered_room > 0.05, extra_spot=None
+        )
 
     def SaveCheckPoint(self, epoch: int, loss: float):
         # Additional information
-        save_filename = os.path.join(self.GetSavePath(), f"model_epoch{epoch}.pt")
+        save_filename = os.path.join(
+            self.GetSavePath(), f"model_{self.opt['data_set']}.pt"
+        )
 
         torch.save(
             {
                 "epoch": epoch,
                 "model_state_dict": self.model.GetRenderer().state_dict(),
-                "optimizer_state_dict": self.model.GetOptimizer(),
+                "optimizer_state_dict": self.model.GetOptimizer().state_dict(),
                 "loss": loss,
             },
             save_filename,
         )
+        self.InfoLog(f"model parameters have been restrored into: {save_filename}")
 
-    def LoadCheckPoint(self, save_filename: str = None, epoch: int = None) -> bool:
+    def LoadCheckPoint(self, save_filename: str = None) -> bool:
         if save_filename is not None and not os.path.exists(save_filename):
             save_filename = None
             self.WarnLog(
                 "You have indicated a specific checkpoint which we cannot find."
             )
-            if epoch is None:
-                self.WarnLog(
-                    "You did not indicate any sepcific epoch either, "
-                    "we will find the most recent check point for you in default."
-                )
-            else:
-                self.WarnLog(
-                    f"However, you did indicate a specific epoch{epoch}, "
-                    "we will find that check point for you."
-                )
 
         if save_filename is None:
+            self.WarnLog(
+                "You did not indicate any sepcific model to load, "
+                "we will find the most recent check point for you in default."
+            )
             pt_files = os.listdir(self.GetSavePath())
 
-            max_saved_epoch = -1
-            epoch_found = False
-
+            model_file = None
+            data_set = "bunny-fur-floor"  # TODO:
             for filename in pt_files:
-                if ".pt" in filename:
-                    left = filename.find("epoch") + 5
-                    right = filename.find(".")
-                    curr_epoch = int(filename[left:right])
+                if ".pt" in filename and data_set in filename:
+                    model_file = filename
 
-                    max_saved_epoch = max(curr_epoch, max_saved_epoch)
-                    if epoch is not None and curr_epoch == epoch:
-                        epoch_found = True
-
-            if epoch is not None and epoch_found:
-                epoch = epoch
+            if model_file is None:
+                self.WarnLog(
+                    "No any saved check point found, we will re-train everything for you"
+                )
+                return False
             else:
-                if epoch is not None and not epoch_found:
-                    self.WarnLog(
-                        f"You indicated to read a checkpoint in specific epoch{epoch}, "
-                        "which cannot be found by us. "
-                        "We will find the most recent check point for you in default."
-                    )
+                self.InfoLog(
+                    f"{model_file} found, we will load this checkpoint for you"
+                )
 
-                if max_saved_epoch == -1:
-                    self.WarnLog(
-                        "No any saved check point found, we will re-train everything for you"
-                    )
-                    return False
-                else:
-                    epoch = max_saved_epoch
-
-            save_filename = os.path.join(self.GetSavePath(), f"model_epoch{epoch}.pt")
+            save_filename = os.path.join(self.GetSavePath(), f"model_{data_set}.pt")
 
         # load check point
         check_point = torch.load(save_filename)
@@ -219,6 +238,10 @@ class CoreManager(AbstractManager):
         self.model.optimizer.load_state_dict(check_point["optimizer_state_dict"])
         self.start_epoch = int(check_point["epoch"])
         loss = check_point["loss"]
+
+        self.InfoLog(
+            f"Sucessfully loaded a checkpoint start from epoch {self.start_epoch}"
+        )
 
         return True
 

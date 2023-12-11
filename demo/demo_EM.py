@@ -42,7 +42,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--lr", type=float, default=0.0001, help="learning rate")
     parser.add_argument(
-        "--use_check_point", type=bool, default=False, help="Use Check Point?"
+        "--use_check_point", type=bool, default=True, help="Use Check Point?"
+    )
+    parser.add_argument(
+        "--save_check_point", type=bool, default=True, help="Save Check Point?"
     )
     parser.add_argument("--total_steps", type=int, default=500, help="Total Steps")
 

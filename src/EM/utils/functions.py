@@ -233,7 +233,7 @@ def DeleteFloorOrCeil(
     verts = verts.reshape(-1, 3)
     faces = faces.reshape(-1, 3)
 
-    eps = 1e-5
+    eps = 1e-4
     z_min = verts[..., axis].min()
     z_max = verts[..., axis].max()
     face_verts = torch.index_select(
