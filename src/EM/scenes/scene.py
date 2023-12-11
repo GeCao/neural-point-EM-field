@@ -28,106 +28,125 @@ class NeuralScene(AbstractScene):
         self.device = device
         self.dtype = dtype
         self.scene_opt = scene_opt
+        self.opt = core_manager.opt
         self.log_manager = core_manager._log_manager
 
         self.K_closest = scene_opt["lightfield"].get("k_closest", 8)
 
+        data_path = core_manager.GetDataPath()
+        self.is_training = self.opt["is_training"]
+        validation_target = self.opt["validation_target"]
+        data_set = self.opt["data_set"]
+
         self.meshes = LoadMeshes(
-            data_path=core_manager.GetDataPath(),
-            device=torch.device("cpu"),
-            dtype=dtype,
+            data_path=data_path, device=torch.device("cpu"), dtype=dtype
         )
         self.point_clouds = LoadPointCloudFromMesh(
             meshes=self.meshes, num_pts_samples=3000
         )  # [F, n_pts, 3]
         self.point_clouds = self.point_clouds.to(device)
-        core_manager.InfoLog(
+        self.log_manager.InfoLog(
             f"Point Clouds loading finished, with shape={self.point_clouds.shape}"
         )
 
-        self.nodes = {}
+        self.nodes = {"train": None, "test": None, "validation": None}
         # Transmitters:
         self.transmitters = {
             int(TrainType.TRAIN): [],
             int(TrainType.TEST): [],
-            int(TrainType.VALIDATION): [],
+            int(TrainType.VALIDATION): {},
         }
         # Frames
         self.receivers = {
             int(TrainType.TRAIN): [],
             int(TrainType.TEST): [],
-            int(TrainType.VALIDATION): [],
+            int(TrainType.VALIDATION): {},
         }  # traintype: List[Frame]
 
-        data = core_manager.LoadData(core_manager.opt["is_training"])
-        train_data = [
-            torch.from_numpy(data["train"][i]).to(device).to(dtype)
-            for i in range(len(data["train"]))
-        ]
-        checkerboard_data = [
-            torch.from_numpy(data["checkerboard"][i]).to(device).to(dtype)
-            for i in range(len(data["checkerboard"]))
-        ]
-        genz_data = [
-            torch.from_numpy(data["genz"][i]).to(device).to(dtype)
-            for i in range(len(data["genz"]))
-        ]
-        gendiag_data = [
-            torch.from_numpy(data["gendiag"][i]).to(device).to(dtype)
-            for i in range(len(data["gendiag"]))
-        ]
-        train_data = [
-            train_data[0][0:1, ...],
-            train_data[1],
-            train_data[2][0:1, ...],
-            train_data[3][0:1, ...],
-        ]
-        checkerboard_data = [
-            checkerboard_data[0][0:1, ...],
-            checkerboard_data[1],
-            checkerboard_data[2][0:1, ...],
-            checkerboard_data[3][0:1, ...],
-        ]
-        genz_data = [
-            genz_data[0][0:1, ...],
-            genz_data[1],
-            genz_data[2][0:1, ...],
-            genz_data[3][0:1, ...],
-        ]
-        gendiag_data = [
-            gendiag_data[0][0:1, ...],
-            gendiag_data[1],
-            gendiag_data[2][0:1, ...],
-            gendiag_data[3][0:1, ...],
-        ]
-        data["train"] = train_data
-        data["checkerboard"] = checkerboard_data
-        data["genz"] = genz_data
-        data["gendiag"] = gendiag_data
+        data = core_manager.LoadData(
+            self.is_training, validation_target, device=device, dtype=dtype
+        )
+        self.validation_target = data["target_list"]  # ["checkerboard"] or ["genz"] ...
+        # data structure:
+        # "train"       -> [ch, floor_idx, rx, tx]
+        # "validation"  -> "checkerboard" -> [ch, floor_idx, rx, tx]
+        #                  "genz"         -> [ch, floor_idx, rx, tx]
+        #                  "gendiag"         -> [ch, floor_idx, rx, tx]
+        #                  ...
+        # "target_list" -> ["checkerboard", "genz". "gendiag", ...]
+        #
+        # 1). Note target_list is controlled by opt["validation_target"]
+        # 2). Note "train" key only exist when is_training.
 
-        self.nodes["train"] = train_data
-        self.nodes["test"] = data[core_manager.opt["test_target"]]
-        self.nodes["validation"] = data[core_manager.opt["validation_target"]]
+        if self.is_training:
+            data["train"] = [
+                data["train"][0][0:1, ...],
+                data["train"][1],
+                data["train"][2][0:1, ...],
+                data["train"][3][0:1, ...],
+            ]
 
-        # [F, T, 1, R, D=8, n_rays] for ch
-        train_ch, _, _, _ = train_data
-        test_ch, _, _, _ = self.nodes["test"]
-        validation_ch, _, _, _ = self.nodes["validation"]
+            train_percent = 0.9
+            tx_split = int(data["train"][0].shape[1] * train_percent)
+            # TODO: rx_split
 
-        self.n_train_env = train_ch.shape[0]  # F
-        self.n_train_transmitter = train_ch.shape[1]  # T
-        self.n_train_receivers = train_ch.shape[3]  # R
-        self.n_train_rays = train_ch.shape[5]  # n_rays
+            self.nodes["train"] = [
+                data["train"][0][:, 0:tx_split, ...],
+                data["train"][1],
+                data["train"][2][:, 0:tx_split, ...],
+                data["train"][3][:, 0:tx_split, ...],
+            ]
+            # [F, T, 1, R, D=8, n_rays] for ch
+            self.n_train_env = self.nodes["train"][0].shape[0]  # F
+            self.n_train_transmitter = self.nodes["train"][0].shape[1]  # T
+            self.n_train_receivers = self.nodes["train"][0].shape[3]  # R
+            self.n_train_rays = self.nodes["train"][0].shape[5]  # n_rays
 
-        self.n_test_env = test_ch.shape[0]  # F
-        self.n_test_transmitter = test_ch.shape[1]  # T
-        self.n_test_receivers = test_ch.shape[3]  # R
-        self.n_test_rays = test_ch.shape[4]  # n_rays
+            self.nodes["test"] = [
+                data["train"][0][:, tx_split:, ...],
+                data["train"][1],
+                data["train"][2][:, tx_split:, ...],
+                data["train"][3][:, tx_split:, ...],
+            ]
+            # [F, T, 1, R, D=8, n_rays] for ch
+            self.n_test_env = self.nodes["test"][0].shape[0]  # F
+            self.n_test_transmitter = self.nodes["test"][0].shape[1]  # T
+            self.n_test_receivers = self.nodes["test"][0].shape[3]  # R
+            self.n_test_rays = self.nodes["test"][0].shape[5]  # n_rays
 
-        self.n_validation_env = validation_ch.shape[0]  # F
-        self.n_validation_transmitter = validation_ch.shape[1]  # T
-        self.n_validation_receivers = validation_ch.shape[3]  # R
-        self.n_validation_rays = validation_ch.shape[4]  # n_rays
+        self.n_validation_env = {}
+        self.n_validation_transmitter = {}
+        self.n_validation_receivers = {}
+        self.n_validation_rays = {}
+        for target_name in self.validation_target:
+            data["validation"][target_name] = [
+                data["validation"][target_name][0][0:1, ...],
+                data["validation"][target_name][1],
+                data["validation"][target_name][2][0:1, ...],
+                data["validation"][target_name][3][0:1, ...],
+            ]
+            # [F, T, 1, R, D=8, n_rays] for ch
+            self.n_validation_env[target_name] = data["validation"][target_name][
+                0
+            ].shape[
+                0
+            ]  # F
+            self.n_validation_transmitter[target_name] = data["validation"][
+                target_name
+            ][0].shape[
+                1
+            ]  # T
+            self.n_validation_receivers[target_name] = data["validation"][target_name][
+                0
+            ].shape[
+                3
+            ]  # R
+            self.n_validation_rays[target_name] = data["validation"][target_name][
+                0
+            ].shape[
+                5
+            ]  # n_rays
+        self.nodes["validation"] = data["validation"]
 
         self.ray_sampler = RaySampler(
             K_closest=self.K_closest,
@@ -139,55 +158,96 @@ class NeuralScene(AbstractScene):
         self.Initialization()
 
     def RaySample(
-        self, env_idx: int, tx_idx: int, rx_idx: int, train_type: int = 0
+        self,
+        env_idx: int,
+        tx_idx: int,
+        rx_idx: int,
+        validation_name: str = None,
+        train_type: int = 0,
     ) -> List[torch.Tensor]:
         return self.ray_sampler(
-            self, env_idx=env_idx, tx_idx=tx_idx, rx_idx=rx_idx, train_type=train_type
+            self,
+            env_idx=env_idx,
+            tx_idx=tx_idx,
+            rx_idx=rx_idx,
+            validation_name=validation_name,
+            train_type=train_type,
         )
 
     def Initialization(self):
         # Frames
-        train_types = [
-            int(TrainType.TRAIN),
-            int(TrainType.TEST),
-            int(TrainType.VALIDATION),
-        ]
+        train_types = (
+            [
+                int(TrainType.TRAIN),
+                int(TrainType.TEST),
+                int(TrainType.VALIDATION),
+            ]
+            if self.is_training
+            else [int(TrainType.VALIDATION)]
+        )
         env_idx = 0
         for train_type in train_types:
-            _, _, rx_data, tx_data = self.GetData(train_type=train_type)
+            _, _, rx_data, tx_data = self.GetData(
+                train_type=train_type, validation_name=self.opt["validation_target"]
+            )
             n_transmitter = self.GetNumTransmitters(train_type=train_type)
             n_receivers = self.GetNumReceivers(train_type=train_type)
 
-            self.transmitters[train_type] = [
-                Transmitter(
-                    source_location=tx_data[env_idx, tx_idx],
-                    device=self.device,
-                    dtype=self.dtype,
-                )
-                for tx_idx in range(n_transmitter)
-            ]
-
-            self.receivers[train_type] = [
-                [
-                    Camera(
-                        eye=rx_data[env_idx, tx_idx, 0, rx_idx],
+            if train_type != int(TrainType.VALIDATION):
+                self.transmitters[train_type] = [
+                    Transmitter(
+                        source_location=tx_data[env_idx, tx_idx],
                         device=self.device,
                         dtype=self.dtype,
                     )
-                    for rx_idx in range(n_receivers)
+                    for tx_idx in range(n_transmitter)
                 ]
-                for tx_idx in range(n_transmitter)
-            ]
+
+                self.receivers[train_type] = [
+                    [
+                        Camera(
+                            eye=rx_data[env_idx, tx_idx, 0, rx_idx],
+                            device=self.device,
+                            dtype=self.dtype,
+                        )
+                        for rx_idx in range(n_receivers)
+                    ]
+                    for tx_idx in range(n_transmitter)
+                ]
+            else:
+                for validation_name in self.validation_target:
+                    self.transmitters[train_type][validation_name] = [
+                        Transmitter(
+                            source_location=tx_data[env_idx, tx_idx],
+                            device=self.device,
+                            dtype=self.dtype,
+                        )
+                        for tx_idx in range(n_transmitter[validation_name])
+                    ]
+
+                    self.receivers[train_type][validation_name] = [
+                        [
+                            Camera(
+                                eye=rx_data[env_idx, tx_idx, 0, rx_idx],
+                                device=self.device,
+                                dtype=self.dtype,
+                            )
+                            for rx_idx in range(n_receivers[validation_name])
+                        ]
+                        for tx_idx in range(n_transmitter[validation_name])
+                    ]
 
         self.InfoLog("Neural Scene fully prepared.")
 
-    def GetData(self, train_type: int) -> List[torch.Tensor]:
+    def GetData(
+        self, train_type: int, validation_name: str = None
+    ) -> List[torch.Tensor]:
         if train_type == int(TrainType.TRAIN):
             return self.nodes["train"]
         elif train_type == int(TrainType.TEST):
             return self.nodes["test"]
         elif train_type == int(TrainType.VALIDATION):
-            return self.nodes["validation"]
+            return self.nodes["validation"][validation_name]
         else:
             self.ErrorLog(
                 f"We only support Train: {int(TrainType.TRAIN)}, "
@@ -199,15 +259,29 @@ class NeuralScene(AbstractScene):
         return self.receivers[train_type]
 
     def GetReceiver(
-        self, transmitter_idx: int, receiver_idx: int, train_type: int
+        self,
+        transmitter_idx: int,
+        receiver_idx: int,
+        train_type: int,
+        validation_name: str = None,
     ) -> Camera:
-        return self.receivers[train_type][transmitter_idx][receiver_idx]
+        if train_type == int(TrainType.VALIDATION):
+            return self.receivers[train_type][validation_name][transmitter_idx][
+                receiver_idx
+            ]
+        else:
+            return self.receivers[train_type][transmitter_idx][receiver_idx]
 
     def GetTransmitters(self, train_type: int) -> List[Transmitter]:
         return self.transmitters[train_type]
 
-    def GetTransmitter(self, transmitter_idx: int, train_type: int) -> Transmitter:
-        return self.transmitters[train_type][transmitter_idx]
+    def GetTransmitter(
+        self, transmitter_idx: int, train_type: int, validation_name: str = None
+    ) -> Transmitter:
+        if train_type == int(TrainType.VALIDATION):
+            return self.transmitters[train_type][validation_name][transmitter_idx]
+        else:
+            return self.transmitters[train_type][transmitter_idx]
 
     def GetNumRays(self, train_type: int) -> int:
         if train_type == int(TrainType.TRAIN):

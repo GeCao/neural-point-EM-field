@@ -39,7 +39,7 @@ def GetData(
 ) -> List[torch.Tensor]:
     data_path = os.path.join(root_path, "data", data_set)
     data_manager = DataManager(data_path=data_path)
-    data = data_manager.LoadData(is_training=True)
+    data = data_manager.LoadData(is_training=True, device=device, dtype=dtype)
 
     # [F, T, 1, R, K, I, 4] for intersections
     # [F, T, 1, R, D=8, K] for channels
@@ -49,11 +49,6 @@ def GetData(
         ch, floor_idx, rx, tx = data["genz"]
     elif train_type == int(TrainType.VALIDATION):
         ch, floor_idx, rx, tx = data["gendiag"]
-
-    ch = torch.from_numpy(ch).to(device).to(dtype)
-    floor_idx = torch.from_numpy(floor_idx).to(device)
-    rx = torch.from_numpy(rx).to(device).to(dtype)
-    tx = torch.from_numpy(tx).to(device).to(dtype)
 
     return ch, floor_idx, rx, tx
 

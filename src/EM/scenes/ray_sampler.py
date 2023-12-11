@@ -75,6 +75,7 @@ class RaySampler(nn.Module):
         env_idx: int,
         tx_idx: int,
         rx_idx: int,
+        validation_name: str = None,
         train_type: int = 0,
     ) -> List[torch.Tensor]:
         """
@@ -97,10 +98,9 @@ class RaySampler(nn.Module):
         """
 
         # 1. Generate rays.
-        # [F, T, 1, R, K, I, 4] Intersection
         # [F, T, 1, R, D=8, K] channels
         # [F, T, 1, R, 3] rx
-        ch, _, rx, _ = scene.GetData(train_type)
+        ch, _, rx, _ = scene.GetData(train_type, validation_name=validation_name)
         # Please note the ray is actually all shot from tx
         ray_o = rx
         ray_azimuth = ch[..., 5, :]  # [F, T, 1, R, K]
@@ -132,7 +132,10 @@ class RaySampler(nn.Module):
             pitch,
             sky_mask,
         ) = scene.GetReceiver(
-            transmitter_idx=tx_idx, receiver_idx=rx_idx, train_type=train_type
+            transmitter_idx=tx_idx,
+            receiver_idx=rx_idx,
+            train_type=train_type,
+            validation_name=validation_name,
         ).FindKClosest(
             ray_o=ray_o_input,
             ray_d=ray_d_input,
@@ -153,7 +156,9 @@ class RaySampler(nn.Module):
             torch.bool
         )  # [n_rays, 1]
         transmitter = scene.GetTransmitter(
-            transmitter_idx=tx_idx, train_type=train_type
+            transmitter_idx=tx_idx,
+            train_type=train_type,
+            validation_name=validation_name,
         )
         tx_info = transmitter.Decompose(points=point_clouds)
 

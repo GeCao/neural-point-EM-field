@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import h5py
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 import torch
 from torch.utils.data import DataLoader, Dataset
 
@@ -18,27 +18,64 @@ class SceneDataSet(Dataset):
 
         self.num_envs = self.scene.GetNumEnvs(self.train_type)
         self.num_tx = self.scene.GetNumTransmitters(self.train_type)
-        if train_type != int(TrainType.TRAIN):
-            self.num_tx = 1
         self.num_rx = self.scene.GetNumReceivers(self.train_type)
-        self.length = self.num_envs * self.num_tx * self.num_rx
+
+        self.validation_names = []
+        if type(self.num_rx) == dict:
+            self.lengths = []
+            self.total_length = 0
+            for i, key in enumerate(self.num_rx):
+                self.num_tx[key] = 1  # TODO:
+                self.lengths.append(
+                    self.num_envs[key] * self.num_tx[key] * self.num_rx[key]
+                )
+                self.total_length += self.lengths[i]
+                self.validation_names.append(key)
+        else:
+            self.lengths = [self.num_envs * self.num_tx * self.num_rx]
+            self.total_length = self.lengths[0]
 
     def __len__(self) -> int:
-        return self.length
+        return self.total_length
 
     def __getitem__(self, index: int) -> List[torch.Tensor]:
         with torch.no_grad():
+            index = index % self.__len__()
             # points, distance, proj_distance, pitch, azimuth
-            env_idx = index // (self.num_tx * self.num_rx)
-            tx_idx = (index % (self.num_tx * self.num_rx)) // self.num_rx
-            rx_idx = (index % (self.num_tx * self.num_rx)) % self.num_rx
+            for i, len_ in enumerate(self.lengths):
+                if index < len_:
+                    validation_name = (
+                        None
+                        if len(self.validation_names) == 0
+                        else self.validation_names[i]
+                    )
 
-            return self.scene.RaySample(
-                env_idx=env_idx,
-                tx_idx=tx_idx,
-                rx_idx=rx_idx,
-                train_type=self.train_type,
-            )
+                    num_tx = (
+                        self.num_tx
+                        if type(self.num_tx) != dict
+                        else self.num_tx[validation_name]
+                    )
+                    num_rx = (
+                        self.num_rx
+                        if type(self.num_rx) != dict
+                        else self.num_rx[validation_name]
+                    )
+
+                    env_idx = index // (num_tx * num_rx)
+                    tx_idx = (index % (num_tx * num_rx)) // num_rx
+                    rx_idx = (index % (num_tx * num_rx)) % num_rx
+
+                    return self.scene.RaySample(
+                        env_idx=env_idx,
+                        tx_idx=tx_idx,
+                        rx_idx=rx_idx,
+                        validation_name=validation_name,
+                        train_type=self.train_type,
+                    )
+                else:
+                    index = index - len_
+
+            return None
 
 
 class DataManager(object):
@@ -57,7 +94,13 @@ class DataManager(object):
     def GetDataPath(self):
         return self.data_path
 
-    def LoadData(self, is_training: bool = False) -> Dict[str, torch.Tensor]:
+    def LoadData(
+        self,
+        is_training: bool = False,
+        validation_target: str = "all",
+        device: torch.device = torch.device("cpu"),
+        dtype=torch.float32,
+    ) -> Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]:
         """Load data from disk
         Note the data structure is given below:
         # F := #Environments
@@ -87,11 +130,19 @@ class DataManager(object):
         """
         data_path = self.GetDataPath()
         target_list = ["checkerboard", "genz", "gendiag"]
+        if validation_target == "all":
+            target_list = target_list
+        elif validation_target in target_list:
+            target_list = [validation_target]
+        else:
+            raise RuntimeError(
+                f"You claim your validation data named as {validation_target}, which is not match with our choices {target_list}"
+            )
         data_files = os.listdir(data_path)
 
-        result = {"train": None}
+        result = {"train": None, "validation": {}, "target_list": target_list}
         for target_name in target_list:
-            result[target_name] = None
+            result["validation"][target_name] = None
 
         for filename in data_files:
             if filename[-3:] == ".h5":
@@ -102,8 +153,8 @@ class DataManager(object):
                     for name in target_list:
                         target_name = name if name in filename else target_name
 
-                if target_name is None:
-                    continue
+                    if target_name is None:
+                        continue
 
                 # load train/test data:
                 data = h5py.File(os.path.join(data_path, filename))
@@ -114,15 +165,32 @@ class DataManager(object):
                 rx = np.array(data["rx"][0:1, ...])  # [F, T, 1, R, dim=3]
                 tx = np.array(data["tx"][0:1, ...])  # [F, T, dim=3]
 
-                if result[target_name] is None:
-                    result[target_name] = [ch, floor_idx, rx, tx]
+                ch = torch.from_numpy(ch).to(dtype).to(device)
+                floor_idx = torch.from_numpy(floor_idx).to(torch.int32).to(device)
+                rx = torch.from_numpy(rx).to(dtype).to(device)
+                tx = torch.from_numpy(tx).to(dtype).to(device)
+
+                if target_name is "train":
+                    if result["train"] is None:
+                        result["train"] = [ch, floor_idx, rx, tx]
+                    else:
+                        tensors = [
+                            torch.cat((result[target_name][0], ch), dim=0),
+                            torch.cat((result[target_name][1], floor_idx), dim=0),
+                            torch.cat((result[target_name][2], rx), dim=0),
+                            torch.cat((result[target_name][3], tx), dim=0),
+                        ]
+                        result["train"] = tensors
                 else:
-                    tensors = [
-                        np.concatenate((result[target_name][0], ch), axis=0),
-                        np.concatenate((result[target_name][1], floor_idx), axis=0),
-                        np.concatenate((result[target_name][2], rx), axis=0),
-                        np.concatenate((result[target_name][3], tx), axis=0),
-                    ]
-                    result[target_name] = tensors
+                    if result["validation"][target_name] is None:
+                        result["validation"][target_name] = [ch, floor_idx, rx, tx]
+                    else:
+                        tensors = [
+                            torch.cat((result[target_name][0], ch), dim=0),
+                            torch.cat((result[target_name][1], floor_idx), dim=0),
+                            torch.cat((result[target_name][2], rx), dim=0),
+                            torch.cat((result[target_name][3], tx), dim=0),
+                        ]
+                        result["validation"][target_name] = tensors
 
         return result

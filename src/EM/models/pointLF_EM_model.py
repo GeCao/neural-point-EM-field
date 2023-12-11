@@ -12,7 +12,7 @@ from src.EM.scenes import NeuralScene
 from src.EM.renderer import PointLightFieldRenderer
 from src.EM.managers import AbstractManager, SceneDataSet
 from src.EM.losses import ChannelLoss
-from src.EM.utils import TrainType, RenderRoom, DrawHeatMapReceivers
+from src.EM.utils import TrainType, LearnTarget
 
 
 class PointLFEMModel(object):
@@ -30,6 +30,10 @@ class PointLFEMModel(object):
         self.opt = opt
         self.device = device
         self.dtype = dtype
+
+        self.learn_target = int(LearnTarget.RECEIVER_GAIN)
+        if "coverage_map" in opt["data_set"] or "cm" in opt["data_set"]:
+            self.learn_target = int(LearnTarget.COVERAGE_MAP)
 
         self.scene = scene
         self.renderer = PointLightFieldRenderer(
@@ -51,7 +55,7 @@ class PointLFEMModel(object):
             drop_last=False,
         )
         self.validation_dataloader = DataLoader(
-            SceneDataSet(scene=scene, train_type=int(TrainType.TEST)),
+            SceneDataSet(scene=scene, train_type=int(TrainType.VALIDATION)),
             shuffle=False,
             batch_size=self.opt["batch_size"],
             num_workers=self.opt["num_workers"],
@@ -142,7 +146,7 @@ class PointLFEMModel(object):
                 sky_mask,
                 tx_info,
                 gt_ch,
-            ) in self.test_dataloader:
+            ) in self.validation_dataloader:
                 Batch_size, n_rays, K_closest = K_closest_indices.shape[0:3]
                 # Prepare all of the dataset
                 # valid_rays = valid_rays.flatten()  # [B*n_rays,], dtype=bool

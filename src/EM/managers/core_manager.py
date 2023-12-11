@@ -1,7 +1,6 @@
 import os
 import numpy as np
 import torch
-import cv2
 from typing import Dict
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -11,7 +10,6 @@ from src.EM.managers import AbstractManager, LogManager, DataManager
 from src.EM.utils import (
     mkdir,
     RenderRoom,
-    DrawHeatMapReceivers,
     SplatFromParticlesToGrid,
     DumpGrayFigureToRGB,
     DeleteFloorOrCeil,
@@ -100,20 +98,6 @@ class CoreManager(AbstractManager):
                         meshes=meshes, num_pts_samples=1000
                     )  # [F, n_pts, 3]
                     rendered_room = RenderRoom(pts[env_idx], res_x=256)
-                    # pred_color, _ = DrawHeatMapReceivers(
-                    #     rx=rx_pos,
-                    #     tx=None,
-                    #     gain=predicted_gains,
-                    #     res_x=rendered_room.shape[1],
-                    #     res_y=rendered_room.shape[0],
-                    # )
-                    # gt_color, _ = DrawHeatMapReceivers(
-                    #     rx=rx_pos,
-                    #     tx=None,
-                    #     gain=gt_gains,
-                    #     res_x=rendered_room.shape[1],
-                    #     res_y=rendered_room.shape[0],
-                    # )
                     predicted_gains = predicted_gains.abs()
                     pred_color = SplatFromParticlesToGrid(
                         particles=rx_pos[..., 0:2],

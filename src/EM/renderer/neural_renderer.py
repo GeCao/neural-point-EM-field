@@ -203,7 +203,7 @@ class PointLightField(nn.Module):
             LightFieldNet(
                 n_feat_in=n_feat_in,
                 n_pt_feat=self.n_pt_features,
-                output_ch=8,
+                output_ch=1,
                 D=lf_architecture["D"],
                 W=lf_architecture["W"],
                 multires=lf_architecture["poseEnc"],

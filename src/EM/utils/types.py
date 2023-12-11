@@ -41,3 +41,11 @@ class FeatureWeighting(Enum):
 
     def __int__(self):
         return self.value
+
+
+class LearnTarget(Enum):
+    RECEIVER_GAIN = 0
+    COVERAGE_MAP = 1
+
+    def __int__(self):
+        return self.value

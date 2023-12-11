@@ -12,7 +12,11 @@ class AbstractScene(ABC):
 
     @abstractmethod
     def GetReceiver(
-        self, transmitter_idx: int, receiver_idx: int, train_type: int
+        self,
+        transmitter_idx: int,
+        receiver_idx: int,
+        train_type: int,
+        validation_name: str,
     ) -> Camera:
         ...
 
@@ -21,7 +25,9 @@ class AbstractScene(ABC):
         ...
 
     @abstractmethod
-    def GetTransmitter(self, transmitter_idx: int, train_type: int) -> Transmitter:
+    def GetTransmitter(
+        self, transmitter_idx: int, train_type: int, validation_name: str
+    ) -> Transmitter:
         ...
 
     @abstractmethod
