@@ -16,14 +16,13 @@ class ChannelLoss(nn.Module):
         angular_index = [1, 3, 4, 5, 6]
         bool_index = [7]  # TODO: Take this as punishment loss design
 
-        x = x.view(1, -1, x.shape[-1])
-        y = y.view(1, -1, y.shape[-1])
+        x = x[..., 0:1].sum(dim=-2)
 
         # x = x[..., :-1] * x[..., -1:]
         # y = y[..., :-1] * y[..., -1:]
 
         # TODO: Try PSNR instead of a simple MSE
-        loss = self.mse_loss(x[..., 0:1], y[..., 0:1])
+        loss = self.mse_loss(x, y)
         # loss += self.mse_loss(x[..., 2], y[..., 2])
         # loss += (1.0 - torch.cos(x[..., 1] - y[..., 1])).mean()  # phase
 

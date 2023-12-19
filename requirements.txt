@@ -4,3 +4,4 @@ pywavefront
 sklearn
 tensorboard
 pyevtk
+open3d

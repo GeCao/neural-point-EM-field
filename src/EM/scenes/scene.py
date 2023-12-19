@@ -38,11 +38,13 @@ class NeuralScene(AbstractScene):
         validation_target = self.opt["validation_target"]
         data_set = self.opt["data_set"]
 
-        self.meshes = LoadMeshes(
+        self.meshes, AABB = LoadMeshes(
             data_path=data_path, device=torch.device("cpu"), dtype=dtype
         )
+        AABB[0] = AABB[0].to(device)
+        AABB[1] = AABB[1].to(device)
         self.point_clouds = LoadPointCloudFromMesh(
-            meshes=self.meshes, num_pts_samples=3000
+            meshes=self.meshes, num_pts_samples=4000
         )  # [F, n_pts, 3]
         self.point_clouds = self.point_clouds.to(device)
         self.log_manager.InfoLog(
@@ -68,10 +70,10 @@ class NeuralScene(AbstractScene):
         )
         self.validation_target = data["target_list"]  # ["checkerboard"] or ["genz"] ...
         # data structure:
-        # "train"       -> [ch, floor_idx, rx, tx]
-        # "validation"  -> "checkerboard" -> [ch, floor_idx, rx, tx]
-        #                  "genz"         -> [ch, floor_idx, rx, tx]
-        #                  "gendiag"         -> [ch, floor_idx, rx, tx]
+        # "train"       -> [ch, rx, tx]
+        # "validation"  -> "checkerboard" -> [ch, rx, tx]
+        #                  "genz"         -> [ch, rx, tx]
+        #                  "gendiag"         -> [ch, rx, tx]
         #                  ...
         # "target_list" -> ["checkerboard", "genz". "gendiag", ...]
         #
@@ -81,51 +83,70 @@ class NeuralScene(AbstractScene):
         if self.is_training:
             data["train"] = [
                 data["train"][0][0:1, ...],
-                data["train"][1],
+                data["train"][1][0:1, ...],
                 data["train"][2][0:1, ...],
-                data["train"][3][0:1, ...],
             ]
+            data["train"][1] = (
+                2.0 * (data["train"][1] - AABB[0]) / (AABB[1] - AABB[0]) - 1.0
+            )
+            data["train"][2] = (
+                2.0 * (data["train"][2] - AABB[0]) / (AABB[1] - AABB[0]) - 1.0
+            )
 
-            train_percent = 0.9
+            train_percent = 1.0
             tx_split = int(data["train"][0].shape[1] * train_percent)
             # TODO: rx_split
 
             self.nodes["train"] = [
                 data["train"][0][:, 0:tx_split, ...],
-                data["train"][1],
+                data["train"][1][:, 0:tx_split, ...],
                 data["train"][2][:, 0:tx_split, ...],
-                data["train"][3][:, 0:tx_split, ...],
             ]
-            # [F, T, 1, R, D=8, n_rays] for ch
+            # [F, T, R, 1] for ch
             self.n_train_env = self.nodes["train"][0].shape[0]  # F
             self.n_train_transmitter = self.nodes["train"][0].shape[1]  # T
-            self.n_train_receivers = self.nodes["train"][0].shape[3]  # R
-            self.n_train_rays = self.nodes["train"][0].shape[5]  # n_rays
+            self.n_train_receivers = self.nodes["train"][0].shape[2]  # R
 
             self.nodes["test"] = [
                 data["train"][0][:, tx_split:, ...],
-                data["train"][1],
+                data["train"][1][:, tx_split:, ...],
                 data["train"][2][:, tx_split:, ...],
-                data["train"][3][:, tx_split:, ...],
             ]
-            # [F, T, 1, R, D=8, n_rays] for ch
+            # [F, T, R, 1] for ch
             self.n_test_env = self.nodes["test"][0].shape[0]  # F
             self.n_test_transmitter = self.nodes["test"][0].shape[1]  # T
-            self.n_test_receivers = self.nodes["test"][0].shape[3]  # R
-            self.n_test_rays = self.nodes["test"][0].shape[5]  # n_rays
+            self.n_test_receivers = self.nodes["test"][0].shape[2]  # R
+
+            self.log_manager.InfoLog(
+                f"[Train]: env={self.n_train_env}, tx={self.n_train_transmitter}, rx={self.n_train_receivers}"
+            )
+            self.log_manager.InfoLog(
+                f"[Test]: env={self.n_test_env}, tx={self.n_test_transmitter}, rx={self.n_test_receivers}"
+            )
+            print("Train tx: ", self.nodes["train"][2])
 
         self.n_validation_env = {}
         self.n_validation_transmitter = {}
         self.n_validation_receivers = {}
-        self.n_validation_rays = {}
         for target_name in self.validation_target:
             data["validation"][target_name] = [
                 data["validation"][target_name][0][0:1, ...],
-                data["validation"][target_name][1],
+                data["validation"][target_name][1][0:1, ...],
                 data["validation"][target_name][2][0:1, ...],
-                data["validation"][target_name][3][0:1, ...],
             ]
-            # [F, T, 1, R, D=8, n_rays] for ch
+            data["validation"][target_name][1] = (
+                2.0
+                * (data["validation"][target_name][1] - AABB[0])
+                / (AABB[1] - AABB[0])
+                - 1.0
+            )
+            data["validation"][target_name][2] = (
+                2.0
+                * (data["validation"][target_name][2] - AABB[0])
+                / (AABB[1] - AABB[0])
+                - 1.0
+            )
+            # [F, T, R, 1] for ch
             self.n_validation_env[target_name] = data["validation"][target_name][
                 0
             ].shape[
@@ -139,13 +160,13 @@ class NeuralScene(AbstractScene):
             self.n_validation_receivers[target_name] = data["validation"][target_name][
                 0
             ].shape[
-                3
+                2
             ]  # R
-            self.n_validation_rays[target_name] = data["validation"][target_name][
-                0
-            ].shape[
-                5
-            ]  # n_rays
+
+            self.log_manager.InfoLog(
+                f"[Validation]: env={self.n_validation_env}, tx={self.n_validation_transmitter}, rx={self.n_validation_receivers}"
+            )
+            print("Validation tx: ", data["validation"][target_name][2])
         self.nodes["validation"] = data["validation"]
 
         self.ray_sampler = RaySampler(
@@ -187,8 +208,8 @@ class NeuralScene(AbstractScene):
         )
         env_idx = 0
         for train_type in train_types:
-            _, _, rx_data, tx_data = self.GetData(
-                train_type=train_type, validation_name=self.opt["validation_target"]
+            _, rx_data, tx_data = self.GetData(
+                train_type=train_type, validation_name=self.validation_target[0]
             )
             n_transmitter = self.GetNumTransmitters(train_type=train_type)
             n_receivers = self.GetNumReceivers(train_type=train_type)
@@ -206,7 +227,7 @@ class NeuralScene(AbstractScene):
                 self.receivers[train_type] = [
                     [
                         Camera(
-                            eye=rx_data[env_idx, tx_idx, 0, rx_idx],
+                            eye=rx_data[env_idx, tx_idx, rx_idx],
                             device=self.device,
                             dtype=self.dtype,
                         )
@@ -228,7 +249,7 @@ class NeuralScene(AbstractScene):
                     self.receivers[train_type][validation_name] = [
                         [
                             Camera(
-                                eye=rx_data[env_idx, tx_idx, 0, rx_idx],
+                                eye=rx_data[env_idx, tx_idx, rx_idx],
                                 device=self.device,
                                 dtype=self.dtype,
                             )
@@ -282,19 +303,6 @@ class NeuralScene(AbstractScene):
             return self.transmitters[train_type][validation_name][transmitter_idx]
         else:
             return self.transmitters[train_type][transmitter_idx]
-
-    def GetNumRays(self, train_type: int) -> int:
-        if train_type == int(TrainType.TRAIN):
-            return self.n_train_rays
-        elif train_type == int(TrainType.TEST):
-            return self.n_test_rays
-        elif train_type == int(TrainType.VALIDATION):
-            return self.n_validation_rays
-        else:
-            self.ErrorLog(
-                "We only accept train type input as Train(0), Test(1) and Validation(2), "
-                f"while your input is {train_type}"
-            )
 
     def GetNumTransmitters(self, train_type: int) -> int:
         if train_type == int(TrainType.TRAIN):

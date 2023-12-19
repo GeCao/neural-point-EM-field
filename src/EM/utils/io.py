@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import pywavefront
 import matplotlib.pyplot as plt
+import open3d as o3d
+from plyfile import PlyData, PlyElement
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import Textures
 from pytorch3d.ops import sample_points_from_meshes
@@ -74,45 +76,91 @@ def LoadMeshes(
                 )
                 vertices.append(new_v)
                 faces.append(new_f)
+            elif filename[-4:] == ".ply":
+                json_path = os.path.join(obj_path, filename)
+                ply_data = o3d.io.read_triangle_mesh(json_path)
+                new_v = np.asarray(ply_data.vertices)
+                new_f = np.asarray(ply_data.triangles)
+
+                new_v = new_v.reshape(1, -1, 3)
+                new_f = new_f.reshape(1, -1, 3)
+
+                new_v = torch.from_numpy(new_v).to(dtype).to(device)
+                new_f = torch.from_numpy(new_f).to(torch.int32).to(device)
+
+                if len(vertices) == 0:
+                    vertices = new_v
+                    faces = new_f
+                else:
+                    vert_offset = vertices.shape[0]
+                    vertices = torch.cat((vertices, new_v), dim=-2)
+                    faces = torch.cat((faces, new_f + vert_offset), dim=-2)
         tex = None
     else:
         tex = Textures(verts_rgb=verts_rgba)
+
+    vertices = torch.from_numpy(np.array(vertices))
+    faces = torch.from_numpy(np.array(faces, dtype=np.int32))
+    vertices_min = vertices.reshape(-1, 3).min(dim=0)[0].reshape(3)
+    vertices_max = vertices.reshape(-1, 3).max(dim=0)[0].reshape(3)
+    vertices = 2.0 * (vertices - vertices_min) / (vertices_max - vertices_min) - 1.0
     meshes = Meshes(verts=vertices, faces=faces, textures=tex)
 
-    return meshes
+    return meshes, [vertices_min, vertices_max]
 
 
 def LoadPointCloudFromMesh(meshes: Meshes, num_pts_samples: int) -> torch.Tensor:
     point_clouds, normals = sample_points_from_meshes(
         meshes, num_samples=num_pts_samples, return_normals=True
     )  # [F, NumOfSamples, 3]
+
+    # DumpCFGFile(
+    #     save_path="/home/gecao2/homework/ACEM/neural-point-EM-field/demo/demo.cfg",
+    #     point_clouds=point_clouds,
+    # )
     return point_clouds
 
 
-def ExportVTKFile(
-    save_path: str, rx_pos: torch.Tensor, gain: torch.Tensor, point_clouds: torch.Tensor
-):
-    x = rx_pos[..., 0].flatten().cpu().numpy()
-    y = rx_pos[..., 1].flatten().cpu().numpy()
-    z = rx_pos[..., 2].flatten().cpu().numpy()
-    gain = gain.cpu().flatten().numpy()
+def DumpCFGFile(save_path: str, point_clouds: torch.Tensor):
+    point_clouds = point_clouds.reshape(-1, 3)
+    bounding_box = [
+        point_clouds.min(dim=0)[0].reshape(3),
+        point_clouds.max(dim=0)[0].reshape(3),
+    ]
+    point_clouds = point_clouds + bounding_box[0].unsqueeze(0)
+    point_clouds = point_clouds * 100
+    bounding_box = [
+        point_clouds.min(dim=0)[0].reshape(3),
+        point_clouds.max(dim=0)[0].reshape(3),
+    ]
+    with open(save_path, "w+") as fp:
+        fp.write(f"Number of particles = {point_clouds.shape[0]}\n")
+        fp.write("A = 1 Angstrom (basic length-scale)\n")
+        fp.write(f"H0(1,1) = {bounding_box[1][0] - bounding_box[0][0]} A\n")
+        fp.write(f"H0(1,2) = {0} A\n")
+        fp.write(f"H0(1,3) = {0} A\n")
+        fp.write(f"H0(2,1) = {0} A\n")
+        fp.write(f"H0(2,2) = {bounding_box[1][1] - bounding_box[0][1]} A\n")
+        fp.write(f"H0(2,3) = {0} A\n")
+        fp.write(f"H0(3,1) = {0} A\n")
+        fp.write(f"H0(3,2) = {0} A\n")
+        fp.write(f"H0(3,3) = {bounding_box[1][2] - bounding_box[0][2]} A\n")
+        fp.write(".NO_VELOCITY.\n")
+        fp.write(f"entry_count = {3}\n")
 
-    x_obs = point_clouds[..., 0].flatten().cpu().numpy()
-    y_obs = point_clouds[..., 1].flatten().cpu().numpy()
-    z_obs = 0 * point_clouds[..., 2].flatten().cpu().numpy() + z.mean()
-    obs_val = 0 * x_obs + gain.mean()
+        mass = 1.0
+        for i in range(point_clouds.shape[0]):
+            fp.write(
+                f"{mass}\n{'H'}\n{point_clouds[i, 0].item()} {point_clouds[i, 1].item()} {point_clouds[i, 2].item()}\n"
+            )
 
-    x = np.concatenate((x, x_obs), axis=0)
-    y = np.concatenate((y, y_obs), axis=0)
-    z = np.concatenate((z, z_obs), axis=0)
-    gain = np.concatenate((gain, obs_val), axis=0)
-
-    pointsToVTK(save_path, x, y, z, data={"gain": gain})
+    fp.close()
 
 
 def DumpGrayFigureToRGB(
     save_path: str,
     color: torch.Tensor,
+    gt_color: torch.Tensor = None,
     mask: torch.Tensor = None,
     extra_spot: torch.Tensor = None,
 ) -> None:
@@ -129,23 +177,44 @@ def DumpGrayFigureToRGB(
             f"Can not recognize input gray color with shape {color.shape}"
         )
 
+    blank_wid = 5
     if extra_spot is not None:
-        assert extra_spot.shape[-1] == 2 or extra_spot.shape[-1] == 3
         extra_spot = extra_spot[..., 0:2].reshape(-1, 2)
+        extra_spot[..., 0] = 0.5 * (extra_spot[..., 0] + 1.0) * W
+        extra_spot[..., 1] = 0.5 * (extra_spot[..., 1] + 1.0) * H
 
     color = color.reshape(H, W)
-    mask = mask.reshape(H, W).to(torch.bool)
-    color[mask] = 0.0
+    if gt_color is not None:
+        gt_color = gt_color.reshape(H, W)
 
-    aspect = int(W / H)
+    if mask is not None:
+        mask = mask.reshape(H, W).to(torch.bool)
+        color[mask] = 0.0
+        if gt_color is not None:
+            gt_color[mask] = 0.0
+
+    if gt_color is not None:
+        blank = torch.zeros((H, blank_wid)).to(color.device).to(color.dtype)
+        color = torch.cat((color, blank, gt_color), dim=-1)
+
+    color[color == 0.0] = np.inf
+
+    aspect = int((W * 2 + 5) / H)
     fig, ax = plt.subplots(1, 1, figsize=(aspect * 6, 6))
     plt.pcolormesh(color.cpu().numpy())
+    plt.title("Prediction - Ground truth")
     if extra_spot is not None:
         x, y = (
             extra_spot[:, 0].cpu().numpy(),
             extra_spot[:, 1].cpu().numpy(),
         )
-        plt.scatter(x, y, c="red")
+        plt.scatter(x, y, c="red", marker="x")
+
+        x, y = (
+            (extra_spot[:, 0] + W + blank_wid).cpu().numpy(),
+            extra_spot[:, 1].cpu().numpy(),
+        )
+        plt.scatter(x, y, c="red", marker="x")
     plt.colorbar()
     plt.savefig(save_path)
     plt.close()

@@ -1,4 +1,7 @@
 from typing import Any, List
+import random
+import math
+import numpy as np
 import torch
 import torch.nn as nn
 from pytorch3d.renderer.implicit.utils import RayBundle
@@ -69,6 +72,19 @@ class RaySampler(nn.Module):
         self.device = device
         self.dtype = dtype
 
+        self.ray_d = None
+
+    @staticmethod
+    def squareToUniformCylinder(r1: float, r2: float) -> List[float]:
+        fai = 2.0 * math.pi * r2
+        return [math.cos(fai), math.sin(fai), 2 * r1 - 1]
+
+    @staticmethod
+    def squareToUniformSphere(r1: float, r2: float) -> List[float]:
+        Cylinder_res = RaySampler.squareToUniformCylinder(r1, r2)
+        r = math.sqrt(1 - Cylinder_res[2] * Cylinder_res[2])
+        return [r * Cylinder_res[0], r * Cylinder_res[1], Cylinder_res[2]]
+
     def forward(
         self,
         scene: AbstractScene,
@@ -100,30 +116,46 @@ class RaySampler(nn.Module):
         # 1. Generate rays.
         # [F, T, 1, R, D=8, K] channels
         # [F, T, 1, R, 3] rx
-        ch, _, rx, _ = scene.GetData(train_type, validation_name=validation_name)
+        ch, rx, _ = scene.GetData(train_type, validation_name=validation_name)
         # Please note the ray is actually all shot from tx
+        n_rays = 30  # TODO: reset this as a parameter
+        if self.ray_d is None or self.ray_d.shape[-2] != n_rays:
+            random.seed(23)
+            self.ray_d = (
+                torch.from_numpy(
+                    np.array(
+                        [
+                            RaySampler.squareToUniformSphere(
+                                random.random(), random.random()
+                            )
+                            for i in range(n_rays)
+                        ]
+                    )
+                )
+                .to(ch.device)
+                .to(ch.dtype)
+            )  # [n_rays, 3]
         ray_o = rx
-        ray_azimuth = ch[..., 5, :]  # [F, T, 1, R, K]
-        ray_elevation = ch[..., 6, :]  # [F, T, 1, R, K]
-        ray_d = torch.stack(
-            (
-                torch.cos(ray_azimuth) * torch.sin(ray_elevation),
-                torch.sin(ray_azimuth) * torch.sin(ray_elevation),
-                torch.cos(ray_elevation),
-            ),
-            dim=-1,
-        )  # [F, T, 1, R, K, 3]
-
-        n_rays = ray_d.shape[-2]
         ray_o_detach = ray_o.detach()
-        ray_d_detach = ray_d.detach()
+        ray_o_input = ray_o_detach[env_idx, tx_idx, rx_idx, :].view(1, 3)  # [1, 3]
+        # ray_azimuth = ch[..., 5, :]  # [F, T, 1, R, K]
+        # ray_elevation = ch[..., 6, :]  # [F, T, 1, R, K]
+        # ray_d = torch.stack(
+        #     (
+        #         torch.cos(ray_azimuth) * torch.sin(ray_elevation),
+        #         torch.sin(ray_azimuth) * torch.sin(ray_elevation),
+        #         torch.cos(ray_elevation),
+        #     ),
+        #     dim=-1,
+        # )  # [F, T, 1, R, K, 3]
+        # n_rays = ray_d.shape[-2]
+        # ray_d_detach = ray_d.detach()
+        # ray_d_input = ray_d_detach[env_idx, tx_idx, rx_idx, :, :]  # [n_rays, 3]
+        ray_d_input = self.ray_d.detach()  # [n_rays, 3]
 
         # 2. Load related object/ Point clouds firstly
         point_clouds = scene.GetPointCloud(env_index=env_idx).reshape(-1, 3)
         # Before everything, find the intersections
-
-        ray_o_input = ray_o_detach[env_idx, tx_idx, 0, rx_idx, :].view(1, 3)  # [1, 3]
-        ray_d_input = ray_d_detach[env_idx, tx_idx, 0, rx_idx, :, :]  # [n_rays, 3]
         (
             topK_indices,
             distance,
@@ -144,17 +176,12 @@ class RaySampler(nn.Module):
         )  # [n_rays, K_closest, 3(1)]
 
         # We would also have to get all of the channel ground truth
-        gt_channels = torch.transpose(
-            ch[env_idx, tx_idx, 0, rx_idx, :, :], -2, -1
-        )  # [n_rays, 8]
+        gt_channels = ch[env_idx, tx_idx, rx_idx, 0:1]  # [1]
 
         ray_info = torch.cat((ray_o_input.repeat(n_rays, 1), ray_d_input), dim=-1)
         points_info = torch.cat((distance, proj_distance, azimuth, pitch), dim=-1)
 
         eps = 1e-6
-        valid_rays = ch[env_idx, tx_idx, 0, rx_idx, 7:8, :].to(
-            torch.bool
-        )  # [n_rays, 1]
         transmitter = scene.GetTransmitter(
             transmitter_idx=tx_idx,
             train_type=train_type,
@@ -167,7 +194,6 @@ class RaySampler(nn.Module):
             ray_info,
             points_info,
             topK_indices,
-            valid_rays,
             sky_mask,
             tx_info,
             gt_channels,

@@ -35,10 +35,6 @@ class AbstractScene(ABC):
         ...
 
     @abstractmethod
-    def GetNumRays(self, train_type: int) -> int:
-        ...
-
-    @abstractmethod
     def GetNumTransmitters(self, train_type: int) -> int:
         ...
 

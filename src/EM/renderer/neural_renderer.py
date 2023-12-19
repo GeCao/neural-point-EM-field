@@ -92,19 +92,19 @@ class LightFieldNet(nn.Module):
                 h = torch.cat([inputs, h], -1)
 
         out = self.ch_linear(h, z=z)
-        # channels = F.leaky_relu(out)  # torch.sigmoid(out)
-        channels = torch.cat(
-            (
-                out[..., 0:1],
-                torch.sigmoid(out[..., 1:2]) * (2.0 * math.pi),
-                out[..., 2:3],
-                torch.sigmoid(out[..., 3:7]) * (2.0 * math.pi),
-                torch.sigmoid(out[..., 7:8]),
-            ),
-            dim=-1,
-        )
+        # channels = -F.relu(out)  # torch.sigmoid(out)
+        # channels = torch.cat(
+        #     (
+        #         out[..., 0:1],
+        #         torch.sigmoid(out[..., 1:2]) * (2.0 * math.pi),
+        #         out[..., 2:3],
+        #         torch.sigmoid(out[..., 3:7]) * (2.0 * math.pi),
+        #         torch.sigmoid(out[..., 7:8]),
+        #     ),
+        #     dim=-1,
+        # )
 
-        return channels.view(n_batch, n_rays, self.output_ch)
+        return out.view(n_batch, n_rays, self.output_ch)
 
 
 # Takes Points, weights  and rays and maps to color

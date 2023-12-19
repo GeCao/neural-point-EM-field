@@ -76,6 +76,7 @@ class CoreManager(AbstractManager):
                 # Validation:
                 (
                     test_loss,
+                    tx_pos,
                     rx_pos,
                     predicted_gains,
                     gt_gains,
@@ -90,6 +91,7 @@ class CoreManager(AbstractManager):
                 if epoch % 10 == 0:
                     self.validation_vis(
                         epoch=epoch,
+                        tx_pos=tx_pos,
                         rx_pos=rx_pos,
                         predicted_gains=predicted_gains,
                         gt_gains=gt_gains,
@@ -101,6 +103,7 @@ class CoreManager(AbstractManager):
             # Validation:
             (
                 test_loss,
+                tx_pos,
                 rx_pos,
                 predicted_gains,
                 gt_gains,
@@ -108,6 +111,7 @@ class CoreManager(AbstractManager):
 
             self.validation_vis(
                 epoch=epoch,
+                tx_pos=tx_pos,
                 rx_pos=rx_pos,
                 predicted_gains=predicted_gains,
                 gt_gains=gt_gains,
@@ -116,6 +120,7 @@ class CoreManager(AbstractManager):
     def validation_vis(
         self,
         epoch: int,
+        tx_pos: torch.Tensor,
         rx_pos: torch.Tensor,
         predicted_gains: torch.Tensor,
         gt_gains: torch.Tensor,
@@ -132,15 +137,13 @@ class CoreManager(AbstractManager):
         pts = LoadPointCloudFromMesh(
             meshes=meshes, num_pts_samples=1000
         )  # [F, n_pts, 3]
-        rendered_room = RenderRoom(pts[env_idx], res_x=256)
-        predicted_gains = predicted_gains.abs()
+        rendered_room = RenderRoom(pts[env_idx], res_x=128)
         pred_color = SplatFromParticlesToGrid(
             particles=rx_pos[..., 0:2],
             attributes=predicted_gains,
             res_x=rendered_room.shape[1],
             res_y=rendered_room.shape[0],
         )
-        gt_gains = gt_gains.abs()
         gt_color = SplatFromParticlesToGrid(
             particles=rx_pos[..., 0:2],
             attributes=gt_gains,
@@ -157,30 +160,19 @@ class CoreManager(AbstractManager):
             rendered_room.max() - rendered_room.min()
         )
 
-        grid_min, grid_max = gt_color.min(), gt_color.max()
-        pred_color = (pred_color - grid_min) / (grid_max - grid_min)
-        gt_color = (gt_color - grid_min) / (grid_max - grid_min)
-
         save_dir = os.path.join(self._save_path, "imgs")
         mkdir(save_dir)
 
         if epoch is not None:
-            save_path = os.path.join(save_dir, f"pred_env{env_idx}_epoch{epoch}.png")
+            save_path = os.path.join(save_dir, f"env{env_idx}_epoch{epoch}.png")
         else:
-            save_path = os.path.join(save_dir, f"pred_env{env_idx}_validation.png")
+            save_path = os.path.join(save_dir, f"env{env_idx}_validation.png")
         DumpGrayFigureToRGB(
             save_path,
             pred_color,
-            mask=rendered_room > 0.8,
-            extra_spot=None,
-        )
-
-        if epoch is not None:
-            save_path = os.path.join(save_dir, f"gt_env{env_idx}_epoch{epoch}.png")
-        else:
-            save_path = os.path.join(save_dir, f"gt_env{env_idx}_validation.png")
-        DumpGrayFigureToRGB(
-            save_path, gt_color, mask=rendered_room > 0.05, extra_spot=None
+            gt_color,
+            mask=rendered_room > 0.5,
+            extra_spot=tx_pos[..., 0:2],
         )
 
     def SaveCheckPoint(self, epoch: int, loss: float):

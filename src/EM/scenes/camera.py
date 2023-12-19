@@ -124,7 +124,9 @@ class Camera(object):
         points = points.view(1, -1, 3)
         ray_o = ray_o.view(-1, 1, 3)
         ray_d = ray_d.view(-1, 1, 3)
-        fov = math.radians(10)
+        # fov = math.radians(30)
+        n_rays = ray_d.shape[-2]
+        fov = math.sqrt(4.0 * math.pi / n_rays)
         near = 0.1
         far = 1000
         aspect = 1.0

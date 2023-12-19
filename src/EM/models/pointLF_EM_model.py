@@ -82,7 +82,6 @@ class PointLFEMModel(object):
             ray_info,
             pts_info,
             K_closest_indices,
-            valid_rays,
             sky_mask,
             tx_info,
             gt_ch,
@@ -90,20 +89,11 @@ class PointLFEMModel(object):
             # Typically [B,         n_pts,     3          ] - x
             # Typically [B, n_rays,            (3+3      )] - ray_info
             # Typically [B, n_rays, K_closest, (1+1+1+1  )] - pts_info
-            # Typically [B, n_rays,            1          ] - valid_rays
             # Typically [B, n_rays, K_closest, 1          ] - K_closest_indices
             # Typically [B, n_rays,            (3+2+2+1)  ] - gt_ch
             # points, distance, proj_distance, pitch, azimuth in pts_info
             start_time = time.time()
             Batch_size, n_rays, K_closest = K_closest_indices.shape[0:3]
-            # Prepare all of the dataset
-            # valid_rays = valid_rays.flatten()  # [B*n_rays,], dtype=bool
-            # ray_info = ray_info.reshape(-1, *ray_info.shape[2:])[valid_rays]
-            # pts_info = pts_info.reshape(-1, *pts_info.shape[2:])[valid_rays]
-            # gt_ch = gt_ch.reshape(-1, *gt_ch.shape[2:])[valid_rays]
-            # K_closest_indices = K_closest_indices.reshape(
-            #     -1, *K_closest_indices.shape[2:]
-            # )[valid_rays]
             K_closest_mask = (
                 torch.linspace(
                     0,
@@ -148,20 +138,11 @@ class PointLFEMModel(object):
                 ray_info,
                 pts_info,
                 K_closest_indices,
-                valid_rays,
                 sky_mask,
                 tx_info,
                 gt_ch,
             ) in self.validation_dataloader:
                 Batch_size, n_rays, K_closest = K_closest_indices.shape[0:3]
-                # Prepare all of the dataset
-                # valid_rays = valid_rays.flatten()  # [B*n_rays,], dtype=bool
-                # ray_info = ray_info.reshape(-1, *ray_info.shape[2:])[valid_rays]
-                # pts_info = pts_info.reshape(-1, *pts_info.shape[2:])[valid_rays]
-                # gt_ch = gt_ch.reshape(-1, *gt_ch.shape[2:])[valid_rays]
-                # K_closest_indices = K_closest_indices.reshape(
-                #     -1, *K_closest_indices.shape[2:]
-                # )[valid_rays]
                 K_closest_mask = (
                     torch.linspace(
                         0,
@@ -182,37 +163,19 @@ class PointLFEMModel(object):
                 test_loss = self.loss(predicted_ch, gt_ch)
                 test_loss_list.append(test_loss.item())
 
-                valid_rays = valid_rays.flatten()  # [B*n_rays,], dtype=bool
-                ray_info = ray_info.reshape(-1, *ray_info.shape[2:])[valid_rays]
-                predicted_ch = predicted_ch.reshape(-1, *predicted_ch.shape[2:])[
-                    valid_rays
-                ]
-                gt_ch = gt_ch.reshape(-1, *gt_ch.shape[2:])[valid_rays]
+                predicted_ch = predicted_ch.sum(dim=-2)
 
-                predicted_gains = torch.cat(
-                    (
-                        predicted_gains,
-                        predicted_ch.view(-1, predicted_ch.shape[-1])[:, 0:1],
-                    ),
-                    dim=0,
-                )
-                gt_gains = torch.cat(
-                    (
-                        gt_gains,
-                        gt_ch.view(-1, gt_ch.shape[-1])[:, 0:1],
-                    ),
-                    dim=0,
-                )
-                rx_pos = torch.cat(
-                    (
-                        rx_pos,
-                        ray_info.view(-1, ray_info.shape[-1])[:, 0:3],
-                    ),
-                    dim=0,
-                )
+                predicted_gains = torch.cat((predicted_gains, predicted_ch), dim=0)
+                gt_gains = torch.cat((gt_gains, gt_ch), dim=0)
+                rx_pos = torch.cat((rx_pos, ray_info[:, 0, 0:3]), dim=0)
+                tx_pos = self.scene.GetTransmitter(
+                    transmitter_idx=3,
+                    train_type=int(TrainType.VALIDATION),
+                    validation_name=self.scene.validation_target[0],
+                ).GetSourceLocation()
 
         mean_test_loss = np.array(test_loss_list).mean()
-        return [mean_test_loss, rx_pos, predicted_gains, gt_gains]
+        return [mean_test_loss, tx_pos, rx_pos, predicted_gains, gt_gains]
 
     def GetOptimizer(self):
         return self.optimizer
