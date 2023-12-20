@@ -26,6 +26,7 @@ scene_opt = {
         "torch_sampler": True,
         "sky_dome": True,
         "num_merged_frames": 20,
+        "ray_encoding": 2,
     },
     "scale": 0.125,
     "version": 0,

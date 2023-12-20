@@ -181,7 +181,14 @@ class DataManager(object):
                     ch = np.array(
                         data["channels"][0:1, :, 0, :, 0, :]
                     )  # [F, T, 1, R, D=8, K] -> [F, T, R, K], float32
+                    # gain = -10 * log10(strength)
+                    eps = 0.01
+                    invalid = np.abs(ch) < eps
+                    ch = np.power(10.0, -0.1 * ch)
+                    ch[invalid] = 0.0
                     ch = ch.sum(axis=-1, keepdims=True)  # [F, T, R, 1], float32
+                    ch = -10.0 * np.log10(ch)
+                    ch[ch == np.inf] = 0.0
 
                     rx = np.array(
                         data["rx"][0:1, :, 0, ...]

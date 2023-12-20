@@ -87,6 +87,7 @@ class PointLightFieldRenderer(nn.Module):
                     prediction = module(
                         x=x,
                         ray_dirs=ray_d,
+                        ray_info=ray_info[..., 3:],
                         closest_mask=K_closest_mask,
                         pts_distance=pts_distance,
                         pts_proj_distance=pts_proj_distance,

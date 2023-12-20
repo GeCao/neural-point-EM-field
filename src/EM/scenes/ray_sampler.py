@@ -108,7 +108,7 @@ class RaySampler(nn.Module):
             List[torch.Tensor]:
                 points_clouds: [num_pts, dim=3]---------- All of the original points from this scene
                 ray_info:      [n_rays, 6]--------------- ray_o + ray_d
-                points_info:   [n_rays, K_closest, 7]---- 7 = position(3) + distance(1) + proj_distance(1) + azimuth(1) + pitch(1)
+                points_info:   [n_rays, K_closest, 4]---- 4 = distance(1) + proj_distance(1) + azimuth(1) + pitch(1)
                 topK_indices:  [n_rays, K_closest, 1]---- points_clouds[(linspace, topK_indices.flatten().tolist())] = selected_points
                 gt_channels:   [n_rays, D=3]------------- ground truth of wireless channels
         """
@@ -178,8 +178,7 @@ class RaySampler(nn.Module):
         # We would also have to get all of the channel ground truth
         gt_channels = ch[env_idx, tx_idx, rx_idx, 0:1]  # [1]
 
-        ray_info = torch.cat((ray_o_input.repeat(n_rays, 1), ray_d_input), dim=-1)
-        points_info = torch.cat((distance, proj_distance, azimuth, pitch), dim=-1)
+        # TODO: Every ray should also include rx-tx proj distance
 
         eps = 1e-6
         transmitter = scene.GetTransmitter(
@@ -188,6 +187,21 @@ class RaySampler(nn.Module):
             validation_name=validation_name,
         )
         tx_info = transmitter.Decompose(points=point_clouds)
+
+        tx_rx_dist = (
+            (ray_o_input - transmitter.GetSourceLocation().to(self.device))
+            .norm(dim=-1)
+            .reshape(1, 1)
+            .repeat(n_rays, 1)
+        )
+        tx_rx_dist = torch.where(
+            tx_rx_dist < 0.001, 1000 * torch.ones_like(tx_rx_dist), 1.0 / tx_rx_dist
+        )
+        tx_rx_dist = -10.0 * torch.log10(tx_rx_dist)
+        ray_info = torch.cat(
+            (ray_o_input.repeat(n_rays, 1), ray_d_input, tx_rx_dist), dim=-1
+        )
+        points_info = torch.cat((distance, proj_distance, azimuth, pitch), dim=-1)
 
         return (
             point_clouds,

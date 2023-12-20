@@ -44,7 +44,7 @@ class LightFieldNet(nn.Module):
 
         if not layer_modulation:
             Layer = DenseLayer
-            self.input_ch = self.n_feat_in * (n_pt_feat + (multires * 2 * 3 + 3))
+            self.input_ch = self.n_feat_in * (n_pt_feat + (multires * 2 * 4 + 4))
         else:
             Layer = ModulationLayer
             self.input_ch = multires * 2 * 3 + 3
@@ -63,27 +63,27 @@ class LightFieldNet(nn.Module):
 
         self.ch_linear = DenseLayer(W, output_ch, activate=False)
 
-    def forward(self, ray_dirs: torch.Tensor, z: torch.Tensor):
+    def forward(self, ray_info: torch.Tensor, z: torch.Tensor):
         """
-        ray_dirs: [batch_size, N_rays, 3]
+        ray_info: [batch_size, N_rays, 4]
         z: Latent encoding of the Light Field [batch_size, N_rays, k, n_feat]
         """
         if z.dim() == 4:
             n_batch, n_rays, n_feat, feat_ch = z.shape
             assert n_feat == self.n_feat_in
             if not self.layer_modulation:
-                ray_dirs = ray_dirs[..., None, :].repeat(1, 1, n_feat, 1)
+                ray_info = ray_info[..., None, :].repeat(1, 1, n_feat, 1)
         else:
             n_batch, n_rays, feat_ch = z.shape
             n_feat = 1
 
-        ray_dirs = self.pose_encoding(ray_dirs)
+        ray_info = self.pose_encoding(ray_info)
 
         if not self.layer_modulation:
-            inputs = torch.cat([z, ray_dirs], dim=-1).view(n_batch, -1, self.input_ch)
+            inputs = torch.cat([z, ray_info], dim=-1).view(n_batch, -1, self.input_ch)
             h = inputs
         else:
-            h = ray_dirs.view(n_batch * n_rays, self.input_ch)
+            h = ray_info.view(n_batch * n_rays, self.input_ch)
             z = z.view(n_batch * n_rays, self.feat_ch)
 
         for i, l in enumerate(self.pts_linears):
@@ -338,6 +338,7 @@ class PointLightField(nn.Module):
         self,
         x: torch.Tensor,
         ray_dirs: torch.Tensor,
+        ray_info: torch.Tensor,
         closest_mask: Tuple[List[int]],
         pts_distance: torch.Tensor,
         pts_proj_distance: torch.Tensor,
@@ -508,6 +509,6 @@ class PointLightField(nn.Module):
             )
 
         # 5. Predict Light field output with pre-baked features and ray directions
-        color = self._LightField(ray_dirs, feat)
+        color = self._LightField(ray_info, feat)
 
         return color

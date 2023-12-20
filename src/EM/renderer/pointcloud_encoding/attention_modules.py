@@ -165,7 +165,7 @@ class FeatureDistanceEncoder(nn.Module):
         if self.used_distances["tx_distance"]:
             tx_distance = torch.where(
                 tx_distance < 0.01,
-                torch.zeros_like(tx_distance),
+                100 * torch.ones_like(tx_distance),
                 1.0 / tx_distance,
             )
             enc_tx_dist = self.txEncodingLen(tx_distance[..., None])

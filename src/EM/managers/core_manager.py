@@ -73,32 +73,33 @@ class CoreManager(AbstractManager):
                 # Train:
                 loss = self.model.train_on_scene(epoch=epoch)
 
-                # Validation:
-                (
-                    test_loss,
-                    tx_pos,
-                    rx_pos,
-                    predicted_gains,
-                    gt_gains,
-                ) = self.model.validation_on_scene()
+                with torch.no_grad():
+                    # Validation:
+                    (
+                        test_loss,
+                        tx_pos,
+                        rx_pos,
+                        predicted_gains,
+                        gt_gains,
+                    ) = self.model.validation_on_scene()
 
-                self._log_manager.WriterAddScalar("train_loss", loss, epoch)
-                self._log_manager.WriterAddScalar("test_loss", test_loss, epoch)
-                self.InfoLog(
-                    f"epoch = {epoch}, train_loss = {loss.item()}, test_loss = {test_loss.item()}"
-                )
-
-                if epoch % 10 == 0:
-                    self.validation_vis(
-                        epoch=epoch,
-                        tx_pos=tx_pos,
-                        rx_pos=rx_pos,
-                        predicted_gains=predicted_gains,
-                        gt_gains=gt_gains,
+                    self._log_manager.WriterAddScalar("train_loss", loss, epoch)
+                    self._log_manager.WriterAddScalar("test_loss", test_loss, epoch)
+                    self.InfoLog(
+                        f"epoch = {epoch}, train_loss = {loss.item()}, test_loss = {test_loss.item()}"
                     )
 
-                    if self.save_check_point:
-                        self.SaveCheckPoint(epoch=epoch, loss=loss.item())
+                    if True:
+                        self.validation_vis(
+                            epoch=epoch,
+                            tx_pos=tx_pos.detach().clone(),
+                            rx_pos=rx_pos.detach().clone(),
+                            predicted_gains=predicted_gains.detach().clone(),
+                            gt_gains=gt_gains.detach().clone(),
+                        )
+
+                        if self.save_check_point:
+                            self.SaveCheckPoint(epoch=epoch, loss=loss.item())
         else:
             # Validation:
             (
@@ -172,7 +173,7 @@ class CoreManager(AbstractManager):
             pred_color,
             gt_color,
             mask=rendered_room > 0.5,
-            extra_spot=tx_pos[..., 0:2],
+            extra_spot=tx_pos,
         )
 
     def SaveCheckPoint(self, epoch: int, loss: float):
