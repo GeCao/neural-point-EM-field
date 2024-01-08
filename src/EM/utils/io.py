@@ -5,6 +5,7 @@ import torch
 import pywavefront
 import matplotlib.pyplot as plt
 import open3d as o3d
+from typing import List
 from plyfile import PlyData, PlyElement
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import Textures
@@ -103,10 +104,17 @@ def LoadMeshes(
     faces = torch.from_numpy(np.array(faces, dtype=np.int32))
     vertices_min = vertices.reshape(-1, 3).min(dim=0)[0].reshape(3)
     vertices_max = vertices.reshape(-1, 3).max(dim=0)[0].reshape(3)
-    vertices = 2.0 * (vertices - vertices_min) / (vertices_max - vertices_min) - 1.0
+    vertices_len, scale_dim = (vertices_max - vertices_min).max(dim=0)
+    AABB_before_scale = torch.stack((vertices_min, vertices_max), dim=0)  # [2, dim]
+
+    vertices = 2.0 * (vertices - vertices_min[scale_dim]) / vertices_len - 1.0
     meshes = Meshes(verts=vertices, faces=faces, textures=tex)
 
-    return meshes, [vertices_min, vertices_max]
+    vertices_min = vertices.reshape(-1, 3).min(dim=0)[0].reshape(1, 3)
+    vertices_max = vertices.reshape(-1, 3).max(dim=0)[0].reshape(1, 3)
+    AABB = torch.cat((vertices_min, vertices_max), dim=0)  # [2, dim]
+
+    return meshes, AABB_before_scale, AABB
 
 
 def LoadPointCloudFromMesh(meshes: Meshes, num_pts_samples: int) -> torch.Tensor:
@@ -218,3 +226,41 @@ def DumpGrayFigureToRGB(
     plt.colorbar()
     plt.savefig(save_path)
     plt.close()
+
+
+def create_2d_meshgrid_tensor(
+    size: List[int],
+    device: torch.device = torch.device("cpu"),
+    dtype=torch.float32,
+) -> torch.Tensor:
+    [batch, _, height, width] = size
+    y_pos, x_pos = torch.meshgrid(
+        [
+            torch.arange(0, height, device=device, dtype=dtype),
+            torch.arange(0, width, device=device, dtype=dtype),
+        ]
+    )
+    mgrid = torch.stack([x_pos, y_pos], dim=0)  # [C, H, W]
+    mgrid = mgrid.unsqueeze(0)  # [B, C, H, W]
+    mgrid = mgrid.repeat(batch, 1, 1, 1)
+    return mgrid
+
+
+def create_3d_meshgrid_tensor(
+    size: List[int],
+    device: torch.device = torch.device("cpu"),
+    dtype=torch.float32,
+) -> torch.Tensor:
+    [batch, _, depth, height, width] = size
+    z_pos, y_pos, x_pos = torch.meshgrid(
+        [
+            torch.arange(0, depth, device=device, dtype=dtype),
+            torch.arange(0, height, device=device, dtype=dtype),
+            torch.arange(0, width, device=device, dtype=dtype),
+        ]
+    )
+
+    mgrid = torch.stack([x_pos, y_pos, z_pos], dim=0)  # [C, D, H, W]
+    mgrid = mgrid.unsqueeze(0)  # [B, C, D, H, W]
+    mgrid = mgrid.repeat(batch, 1, 1, 1, 1)
+    return mgrid

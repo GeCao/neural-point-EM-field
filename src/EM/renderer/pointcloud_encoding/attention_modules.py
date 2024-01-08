@@ -14,14 +14,13 @@ class FeatureDistanceEncoder(nn.Module):
         n_frequ_pos_encoding: int = 4,
         key_len: int = 16,
         val_len: int = None,
-        use_distance: bool = True,
-        use_projected: bool = False,
-        use_pitch: bool = True,
-        use_azimuth: bool = True,
+        use_pts_distance: bool = True,
+        use_pts_azimuth: bool = True,
+        use_pts_elevation: bool = True,
         use_tx_distance: bool = True,
         use_tx_azimuth: bool = True,
         use_tx_elevation: bool = True,
-        azimuth_2d: bool = False,
+        pts_azimuth_2d: bool = False,
         tx_azimuth_2d: bool = False,
         no_feat: bool = False,
     ):
@@ -47,22 +46,20 @@ class FeatureDistanceEncoder(nn.Module):
             n_frequ_pos_encoding, 1, include_input=False
         )
 
-        self.use_distance = use_distance
-        self.use_projected = use_projected
-        self.use_pitch = use_pitch
-        self.use_azimuth = use_azimuth
+        self.use_pts_distance = use_pts_distance
+        self.use_pts_azimuth = use_pts_azimuth
+        self.use_pts_elevation = use_pts_elevation
         self.use_tx_distance = use_tx_distance
         self.use_tx_azimuth = use_tx_azimuth
         self.use_tx_elevation = use_tx_elevation
-        self.az_2d = azimuth_2d
+        self.pts_az_2d = pts_azimuth_2d
         self.tx_az_2d = tx_azimuth_2d
         self.use_feat = use_feat
 
         self.used_distances = {
-            "distance": use_distance,
-            "projected_distance": use_projected,
-            "pitch": use_pitch,
-            "azimuth": use_azimuth,
+            "pts_distance": use_pts_distance,
+            "pts_azimuth": use_pts_azimuth,
+            "pts_elevation": use_pts_elevation,
             "tx_distance": use_tx_distance,
             "tx_azimuth": use_tx_azimuth,
             "tx_elevation": use_tx_elevation,
@@ -71,10 +68,10 @@ class FeatureDistanceEncoder(nn.Module):
         self.feat_dim_in_key = feat_dim_in // 2
         self.feat_dim_in_val = feat_dim_in - self.feat_dim_in_key
         self.enc_dist_dim_key = (n_frequ_pos_encoding * 2) * (
-            use_distance + use_projected + use_pitch + use_azimuth + azimuth_2d
-        ) + 1 * (use_distance + use_projected + 2 * azimuth_2d)
+            use_pts_distance + use_pts_azimuth + pts_azimuth_2d + use_pts_elevation
+        ) + 1 * (use_pts_distance + 2 * pts_azimuth_2d)
         self.enc_dist_dim_val = (n_frequ_pos_encoding * 2) * (
-            use_tx_distance + use_tx_azimuth + use_tx_elevation + tx_azimuth_2d
+            use_tx_distance + use_tx_azimuth + tx_azimuth_2d + use_tx_elevation
         ) + 1 * (use_tx_distance + 2 * tx_azimuth_2d)
         self.input_ch_key = self.feat_dim_in_key * use_feat + self.enc_dist_dim_key
         self.input_ch_val = self.feat_dim_in_val * use_feat + self.enc_dist_dim_val
@@ -110,57 +107,64 @@ class FeatureDistanceEncoder(nn.Module):
     def forward(
         self,
         features: torch.Tensor,
-        distance: torch.Tensor,
-        projected_distance: torch.Tensor,
-        pitch: torch.Tensor,
-        azimuth: torch.Tensor,
+        pts_distance: torch.Tensor,
+        pts_azimuth: torch.Tensor,
+        pts_elevation: torch.Tensor,
         tx_distance: torch.Tensor = None,
         tx_azimuth: torch.Tensor = None,
         tx_elevation: torch.Tensor = None,
     ):
         """
 
-        directions: [Batch_sz, N_rays, 3]
         features: [Batch_sz, N_rays, N_k_closest, N_feat_maps, dim_feat]
-        distance: [Batch_sz, N_rays, N_k_closest]
-        projected_distance: [Batch_sz, N_rays, N_k_closest]
+        pts_distance: [Batch_sz, N_rays, N_k_closest, 1]
+        tx_distance: [Batch_sz, N_rays, 1, 1]
         :return:
         :rtype:
         """
-        n_batch, n_rays, k_closest, n_feat_maps, feat_len = features.shape
-
-        x_key = torch.empty(n_batch, n_rays, k_closest, 0, device=distance.device)
-        x_val = torch.empty(n_batch, n_rays, k_closest, 0, device=distance.device)
+        if features.dim() == 5:
+            n_batch, n_rays, k_closest, n_feat_maps, feat_len = features.shape
+            x_key = torch.empty(
+                n_batch, n_rays, k_closest, 0, device=pts_distance.device
+            )
+            x_val = torch.empty(n_batch, n_rays, 1, 0, device=pts_distance.device)
+        elif features.dim() == 4:
+            n_batch, n_rays, n_feat_maps, feat_len = features.shape
+            k_closest = 1
+            x_key = torch.empty(n_batch, n_rays, 0, device=pts_distance.device)
+            x_val = torch.empty(n_batch, 1, 0, device=pts_distance.device)
+        else:
+            raise RuntimeError(
+                f"Dim of feature should be 4/5, your input is {features.dim()}"
+            )
 
         # Normalize feature distances
-        if self.used_distances["distance"]:
-            enc_dist = self.poseEncodingLen(distance[..., None])
-            x_key = torch.cat([x_key, enc_dist], dim=-1)
-
-        if self.used_distances["projected_distance"]:
-            x_proj_normalized = (
-                projected_distance / projected_distance.max(dim=-1).values[..., None]
+        if self.used_distances["pts_distance"]:
+            pts_distance = torch.where(
+                pts_distance < 0.01,
+                100 * torch.ones_like(pts_distance),
+                1.0 / pts_distance,
             )
-            enc_proj = self.poseEncodingLen(x_proj_normalized[..., None])
-            x_key = torch.cat([x_key, enc_proj], dim=-1)
+            enc_pts_dist = self.poseEncodingLen(pts_distance)
+            x_key = torch.cat([x_key, enc_pts_dist], dim=-1)
 
-        if self.used_distances["pitch"]:
-            enc_pitch = self.poseEncodingAng(pitch[..., None])
-            x_key = torch.cat([x_key, enc_pitch], dim=-1)
-
-        if self.used_distances["azimuth"]:
-            if not self.az_2d:
-                enc_azimuth = self.poseEncodingAng(azimuth[..., None])
+        if self.used_distances["pts_azimuth"]:
+            if not self.pts_az_2d:
+                enc_pts_azimuth = self.poseEncodingAng(pts_azimuth)
             else:
-                enc_azimuth = torch.cat(
+                enc_pts_azimuth = torch.cat(
                     [
-                        self.poseEncodingLen(torch.sin(azimuth)[..., None]),
-                        self.poseEncodingLen(torch.cos(azimuth)[..., None]),
+                        self.poseEncodingLen(torch.sin(pts_azimuth)),
+                        self.poseEncodingLen(torch.cos(pts_azimuth)),
                     ],
                     dim=-1,
                 )
 
-            x_key = torch.cat([x_key, enc_azimuth], dim=-1)
+            x_key = torch.cat([x_key, enc_pts_azimuth], dim=-1)
+
+        if self.used_distances["pts_elevation"]:
+            enc_pts_elevation = self.poseEncodingAng(pts_elevation)
+            x_key = torch.cat([x_key, enc_pts_elevation], dim=-1)
 
         if self.used_distances["tx_distance"]:
             tx_distance = torch.where(
@@ -168,17 +172,17 @@ class FeatureDistanceEncoder(nn.Module):
                 100 * torch.ones_like(tx_distance),
                 1.0 / tx_distance,
             )
-            enc_tx_dist = self.txEncodingLen(tx_distance[..., None])
+            enc_tx_dist = self.txEncodingLen(tx_distance)
             x_val = torch.cat([x_val, enc_tx_dist], dim=-1)
 
         if self.used_distances["tx_azimuth"]:
-            if not self.az_2d:
-                enc_tx_azimuth = self.txEncodingAng(tx_azimuth[..., None])
+            if not self.tx_az_2d:
+                enc_tx_azimuth = self.txEncodingAng(tx_azimuth)
             else:
                 enc_tx_azimuth = torch.cat(
                     [
-                        self.txEncodingLen(torch.sin(tx_azimuth)[..., None]),
-                        self.txEncodingLen(torch.cos(tx_azimuth)[..., None]),
+                        self.txEncodingLen(torch.sin(tx_azimuth)),
+                        self.txEncodingLen(torch.cos(tx_azimuth)),
                     ],
                     dim=-1,
                 )
@@ -186,15 +190,23 @@ class FeatureDistanceEncoder(nn.Module):
             x_val = torch.cat([x_val, enc_tx_azimuth], dim=-1)
 
         if self.used_distances["tx_elevation"]:
-            enc_tx_elevation = self.txEncodingAng(tx_elevation[..., None])
+            enc_tx_elevation = self.txEncodingAng(tx_elevation)
             x_val = torch.cat([x_val, enc_tx_elevation], dim=-1)
 
-        x_key = x_key[..., None, :].expand(
-            n_batch, n_rays, k_closest, n_feat_maps, self.enc_dist_dim_key
-        )
-        x_val = x_val[..., None, :].expand(
-            n_batch, n_rays, k_closest, n_feat_maps, self.enc_dist_dim_val
-        )
+        if features.dim() == 5:
+            x_key = x_key[..., None, :].expand(
+                n_batch, n_rays, k_closest, n_feat_maps, self.enc_dist_dim_key
+            )
+            x_val = x_val[..., None, :].expand(
+                n_batch, n_rays, k_closest, n_feat_maps, self.enc_dist_dim_val
+            )
+        elif features.dim() == 4:
+            x_key = x_key[..., None, :].expand(
+                n_batch, n_rays, n_feat_maps, self.enc_dist_dim_key
+            )
+            x_val = x_val[..., None, :].expand(
+                n_batch, n_rays, n_feat_maps, self.enc_dist_dim_val
+            )
 
         if self.use_feat:
             x_key = torch.cat(
@@ -219,6 +231,10 @@ class FeatureDistanceEncoder(nn.Module):
                 n_batch * n_rays, k_closest * n_feat_maps, self.input_ch_val
             )
 
+        if features.dim() == 4:
+            x_key = x_key.reshape(n_batch, n_rays * n_feat_maps, self.input_ch_key)
+            x_val = x_val.reshape(n_batch, n_rays * n_feat_maps, self.input_ch_val)
+
         for i, layer in enumerate(self.linear_key):
             x_key = layer(x_key)
             x_key = F.relu(x_key)
@@ -231,153 +247,6 @@ class FeatureDistanceEncoder(nn.Module):
         keys = self.key_linear(x_key)
 
         return values, keys
-
-
-# class FeatureDistanceEncoder(nn.Module):
-#     def __init__(
-#         self,
-#         feat_dim_in=128,
-#         W=256,
-#         D=1,
-#         n_frequ_pos_encoding=4,
-#         key_len=16,
-#         val_len=None,
-#         use_distance=True,
-#         use_projected=False,
-#         use_pitch=True,
-#         use_azimuth=True,
-#         azimuth_2d=False,
-#         no_feat=False,
-#     ):
-#         """
-#         feat_dim_in:
-#         W:
-#         D:
-#         n_frequ_pos_encoding:
-#         key_len:
-#         use_distance:
-#         use_projected:
-#         """
-#         super(FeatureDistanceEncoder, self).__init__()
-#         use_feat = not no_feat
-
-#         self.poseEncodingLen = PositionalEncoding(n_frequ_pos_encoding, 1)
-#         self.poseEncodingAng = PositionalEncoding(
-#             n_frequ_pos_encoding, 1, include_input=False
-#         )
-
-#         self.use_distance = use_distance
-#         self.use_projected = use_projected
-#         self.use_pitch = use_pitch
-#         self.use_azimuth = use_azimuth
-#         self.az_2d = azimuth_2d
-#         self.use_feat = use_feat
-
-#         self.used_distances = {
-#             "distance": use_distance,
-#             "projected_distance": use_projected,
-#             "pitch": use_pitch,
-#             "azimuth": use_azimuth,
-#         }
-
-#         self.enc_dist_dim = (n_frequ_pos_encoding * 2) * (
-#             use_distance + use_projected + use_pitch + use_azimuth + azimuth_2d
-#         ) + 1 * (use_distance + use_projected + 2 * azimuth_2d)
-
-#         self.input_ch = feat_dim_in * use_feat + self.enc_dist_dim
-
-#         self.dim_feat = feat_dim_in * use_feat
-
-#         self.linear = nn.ModuleList(
-#             [DenseLayer(self.input_ch, W)]
-#             + [
-#                 DenseLayer(
-#                     W,
-#                     W,
-#                 )
-#                 for i in range(D - 1)
-#             ]
-#         )
-
-#         if val_len is None:
-#             self.val_out_ch = W - key_len
-#         else:
-#             self.val_out_ch = val_len
-
-#         self.value_linear = DenseLayer(W, self.val_out_ch)
-#         self.key_linear = DenseLayer(W, key_len)
-
-#     def forward(
-#         self,
-#         features: torch.Tensor,
-#         distance: torch.Tensor,
-#         projected_distance: torch.Tensor,
-#         pitch: torch.Tensor,
-#         azimuth: torch.Tensor,
-#         tx_distance: torch.Tensor = None,
-#         tx_azimuth: torch.Tensor = None,
-#         tx_elevation: torch.Tensor = None,
-#     ):
-#         """
-
-#         directions: [Batch_sz, N_rays, 3]
-#         features: [Batch_sz, N_rays, N_k_closest, N_feat_maps, dim_feat]
-#         distance: [Batch_sz, N_rays, N_k_closest]
-#         projected_distance: [Batch_sz, N_rays, N_k_closest]
-#         :return:
-#         :rtype:
-#         """
-#         n_batch, n_rays, k_closest, n_feat_maps, feat_len = features.shape
-
-#         x = torch.empty(n_batch, n_rays, k_closest, 0, device=distance.device)
-
-#         # Normalize feature distances
-#         if self.used_distances["distance"]:
-#             enc_dist = self.poseEncodingLen(distance[..., None])
-#             x = torch.cat([x, enc_dist], dim=-1)
-
-#         if self.used_distances["projected_distance"]:
-#             x_proj_normalized = (
-#                 projected_distance / projected_distance.max(dim=-1).values[..., None]
-#             )
-#             enc_proj = self.poseEncodingLen(x_proj_normalized[..., None])
-#             x = torch.cat([x, enc_proj], dim=-1)
-
-#         if self.used_distances["pitch"]:
-#             enc_pitch = self.poseEncodingAng(pitch[..., None])
-#             x = torch.cat([x, enc_pitch], dim=-1)
-
-#         if self.used_distances["azimuth"]:
-#             if not self.az_2d:
-#                 enc_azimuth = self.poseEncodingAng(azimuth[..., None])
-#             else:
-#                 enc_azimuth = torch.cat(
-#                     [
-#                         self.poseEncodingLen(torch.sin(azimuth)[..., None]),
-#                         self.poseEncodingLen(torch.cos(azimuth)[..., None]),
-#                     ],
-#                     dim=-1,
-#                 )
-
-#             x = torch.cat([x, enc_azimuth], dim=-1)
-
-#         x = x[..., None, :].expand(
-#             n_batch, n_rays, k_closest, n_feat_maps, self.enc_dist_dim
-#         )
-
-#         if self.use_feat:
-#             x = torch.cat([features, x], dim=-1)
-
-#         x = x.reshape(n_batch * n_rays, k_closest * n_feat_maps, self.input_ch)
-
-#         for i, layer in enumerate(self.linear):
-#             x = layer(x)
-#             x = F.relu(x)
-
-#         values = self.value_linear(x)
-#         keys = self.key_linear(x)
-
-#         return values, keys
 
 
 class RayPointPoseEncoder(nn.Module):
@@ -586,11 +455,14 @@ class PointFeatureAttention(nn.Module):
             n_frequ_pos_encoding=n_frequ,
             key_len=kdim,
             val_len=vdim,
-            use_distance=True,
-            use_projected=False,
-            use_pitch=True,
-            use_azimuth=True,
-            azimuth_2d=new_encoding,
+            use_pts_distance=True,
+            use_pts_azimuth=True,
+            use_pts_elevation=True,
+            pts_azimuth_2d=new_encoding,
+            use_tx_distance=True,
+            use_tx_azimuth=True,
+            use_tx_elevation=True,
+            tx_azimuth_2d=new_encoding,
             no_feat=no_feat,
         )
 
@@ -616,32 +488,38 @@ class PointFeatureAttention(nn.Module):
         self,
         directions: torch.Tensor,
         features: torch.Tensor,
-        distance: torch.Tensor = None,
-        projected_distance: torch.Tensor = None,
-        pitch: torch.Tensor = None,
-        azimuth: torch.Tensor = None,
+        pts_distance: torch.Tensor = None,
+        pts_azimuth: torch.Tensor = None,
+        pts_elevation: torch.Tensor = None,
         tx_distance: torch.Tensor = None,
         tx_azimuth: torch.Tensor = None,
         tx_elevation: torch.Tensor = None,
-        **kwargs
+        **kwargs,
     ):
         feat_dim = features.shape[-1]
-        n_batch, n_rays, _ = directions.shape
+        if directions.dim() == 3:
+            n_batch, n_rays, _ = directions.shape
+        elif directions.dim() == 4:
+            n_batch, n_rays, K_closest, _ = directions.shape
+            directions = directions.reshape(n_batch * n_rays, K_closest, 3)
+        else:
+            raise RuntimeError(
+                f"Dim of ray_d should be 3/4, your input is {directions.dim()}"
+            )
         # Generate Key and values from projected point cloud features and positional encoded ray-point distance with an MLP
         val, key = self.FeatureEncoder(
             features,
-            distance,
-            projected_distance,
-            pitch,
-            azimuth,
-            tx_distance,
-            tx_azimuth,
-            tx_elevation,
+            pts_distance=pts_distance,
+            pts_azimuth=pts_azimuth,
+            pts_elevation=pts_elevation,
+            tx_distance=tx_distance,
+            tx_azimuth=tx_azimuth,
+            tx_elevation=tx_elevation,
         )
 
         # Use encoded ray-dirs in MLP to get query vector
-        query = self.RayEncoder(directions.reshape(-1, 3))
-        query = query[:, None]
+        query = self.RayEncoder(directions)
+        # query = query[:, None]
 
         # Attention
         # Query Vector + per point Key + per-point value vector in transformer-style attention + pooling to create conditioning vector

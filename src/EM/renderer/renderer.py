@@ -9,8 +9,6 @@ from src.EM.scenes import NeuralScene
 from src.EM.utils import ModuleType, NodeType
 from src.EM.renderer import PointLightField
 
-# from src.EM.renderer import PointLightField
-
 
 class PointLightFieldRenderer(nn.Module):
     def __init__(
@@ -30,11 +28,6 @@ class PointLightFieldRenderer(nn.Module):
         # Settings
         self.module_type = int(ModuleType.LIGHTFIELD)
         self.ParameterInitialization()
-
-        # self._density_noise_std = 0.0
-        # self._latent_reg = 1e-7
-        # self._chunk_size_test = self.scene.scene_opt
-        # self._transient_head = False
 
     def ParameterInitialization(self):
         module_name = "background"
@@ -61,40 +54,60 @@ class PointLightFieldRenderer(nn.Module):
     def forward_on_batch(
         self,
         x: torch.Tensor,
-        ray_info: torch.Tensor,
-        pts_info: torch.Tensor,
-        K_closest_mask: Tuple[List[int]],
-        sky_mask: torch.Tensor,
-        tx_info: torch.Tensor,
+        light_probe_pos: torch.Tensor,
+        probe_mask: Tuple[List[int]],
+        rx_to_probe_and_tx_info: torch.Tensor,
+        probe_to_pts_indices: torch.Tensor,
+        probe_to_pts_and_tx_info: torch.Tensor,
     ):
         if self.training:
             # Do not over hierachy
             # exert light_field_module
-            # x                           [B, n_pts, 3]
-            if pts_info.dim() == 3:
-                pts_info = pts_info.unsqueeze(0)  # [1, selected_rays, K_closest, 4]
-            if ray_info.dim() == 2:
-                ray_info = ray_info.unsqueeze(0)  # [1, selected_rays, 3]
+            # x                           [1, n_pts, 3]
+            x = x.reshape(1, *x.shape[-2:])
 
-            ray_d = ray_info[..., 3:6]  # [B, n_rays, 3]
-            pts_distance = pts_info[..., 0:1]  # [B, n_rays, K, 1]
-            pts_proj_distance = pts_info[..., 1:2]  # [B, n_rays, K, 1]
-            pts_azimuth = pts_info[..., 2:3]  # [B, n_rays, K, 1]
-            pts_pitch = pts_info[..., 3:4]  # [B, n_rays, K, 1]
-            # K_closest_mask                  x[mask] -> Shape[B*n_rays*n_pts, 3]
+            ray_d = rx_to_probe_and_tx_info[..., 0:3]  # [B, n_rays+1, 3]
+            rx_to_probe_and_tx_distance = rx_to_probe_and_tx_info[
+                ..., 3:4
+            ]  # [B, n_rays+1, 1]
+            rx_to_probe_and_tx_azimuth = rx_to_probe_and_tx_info[
+                ..., 4:5
+            ]  # [B, n_rays+1, 1]
+            rx_to_probe_and_tx_elevation = rx_to_probe_and_tx_info[
+                ..., 5:6
+            ]  # [B, n_rays+1, 1]
+
+            probe_to_pts_and_tx_dir = probe_to_pts_and_tx_info[
+                ..., 0:3
+            ]  # [B, n_rays, K_closest+1, 3]
+            probe_to_pts_and_tx_distance = probe_to_pts_and_tx_info[
+                ..., 3:4
+            ]  # [B, n_rays, K_closest+1, 1]
+            probe_to_pts_and_tx_azimuth = probe_to_pts_and_tx_info[
+                ..., 4:5
+            ]  # [B, n_rays, K_closest+1, 1]
+            probe_to_pts_and_tx_elevation = probe_to_pts_and_tx_info[
+                ..., 5:6
+            ]  # [B, n_rays, K_closest+1, 1]
+            # K_closest_mask                  x[mask] -> Shape[B*n_rays, 3]
+            probe_pts_mask = (
+                probe_to_pts_indices.cpu().flatten().tolist()
+            )  # [B*n_rays*K_closest]
             for module_name, module in self.named_modules():
                 if isinstance(module, PointLightField):
                     prediction = module(
                         x=x,
+                        light_probe_pos=light_probe_pos,
+                        probe_mask=probe_mask,
+                        probe_pts_mask=probe_pts_mask,
                         ray_dirs=ray_d,
-                        ray_info=ray_info[..., 3:],
-                        closest_mask=K_closest_mask,
-                        pts_distance=pts_distance,
-                        pts_proj_distance=pts_proj_distance,
-                        pts_pitch=pts_pitch,
-                        pts_azimuth=pts_azimuth,
-                        sky_mask=sky_mask,
-                        tx_info=tx_info,
+                        rx_to_probe_and_tx_distance=rx_to_probe_and_tx_distance,
+                        rx_to_probe_and_tx_azimuth=rx_to_probe_and_tx_azimuth,
+                        rx_to_probe_and_tx_elevation=rx_to_probe_and_tx_elevation,
+                        probe_to_pts_and_tx_dir=probe_to_pts_and_tx_dir,
+                        probe_to_pts_and_tx_distance=probe_to_pts_and_tx_distance,
+                        probe_to_pts_and_tx_azimuth=probe_to_pts_and_tx_azimuth,
+                        probe_to_pts_and_tx_elevation=probe_to_pts_and_tx_elevation,
                     )
                     return prediction
                 else:

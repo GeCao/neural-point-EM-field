@@ -36,6 +36,8 @@ class SceneDataSet(Dataset):
             self.lengths = [self.num_envs * self.num_tx * self.num_rx]
             self.total_length = self.lengths[0]
 
+        print("validation names = ", self.validation_names)
+
     def __len__(self) -> int:
         return self.total_length
 
@@ -67,7 +69,7 @@ class SceneDataSet(Dataset):
                     rx_idx = (index % (num_tx * num_rx)) % num_rx
 
                     if self.train_type == int(TrainType.VALIDATION):
-                        tx_idx = 3  # TODO: tx_idx=3 only
+                        tx_idx = 0  # TODO: tx_idx=3 only
 
                     return self.scene.RaySample(
                         env_idx=env_idx,
@@ -145,7 +147,7 @@ class DataManager(object):
         elif "rt" in str(data_path):
             # Different data management
             data_files = os.listdir(data_path)
-            target_list = ["022"]
+            target_list = ["023"]
         else:
             target_list = ["checkerboard", "genz", "gendiag"]
             if validation_target == "all":
@@ -162,11 +164,10 @@ class DataManager(object):
         for target_name in target_list:
             result["validation"][target_name] = None
 
-        tx_idx = -1
         for filename in data_files:
             if filename[-3:] == ".h5":
                 target_name = None
-                if is_training and "train" in filename:
+                if "train" in filename:
                     target_name = "train"
                 else:
                     for name in target_list:
@@ -181,13 +182,13 @@ class DataManager(object):
                     ch = np.array(
                         data["channels"][0:1, :, 0, :, 0, :]
                     )  # [F, T, 1, R, D=8, K] -> [F, T, R, K], float32
-                    # gain = -10 * log10(strength)
+                    # gain = 10 * log10(strength)
                     eps = 0.01
                     invalid = np.abs(ch) < eps
-                    ch = np.power(10.0, -0.1 * ch)
+                    ch = np.power(10.0, 0.1 * ch)
                     ch[invalid] = 0.0
                     ch = ch.sum(axis=-1, keepdims=True)  # [F, T, R, 1], float32
-                    ch = -10.0 * np.log10(ch)
+                    ch = 10.0 * np.log10(ch)
                     ch[ch == np.inf] = 0.0
 
                     rx = np.array(
@@ -195,12 +196,16 @@ class DataManager(object):
                     )  # [F, T, 1, R, dim=3] -> [F, T, R, dim=3]
                     tx = np.array(data["tx"][0:1, ...])  # [F, T, dim=3]
                 elif "gain" in data:
-                    ch = np.array(data["gain"])  # [T, R, 1]
-                    rx = np.array(data["rx"])  # [T, R, dim=3]
+                    ch = np.array(data["gain"])  # [T, H, W, 1]
+                    rx = np.array(data["rx"])  # [T, H, W, dim=3]
                     tx = np.array(data["tx"])  # [T, dim=3]
-                    ch = np.expand_dims(ch, axis=0)  # [F, T, R, 1]
-                    rx = np.expand_dims(rx, axis=0)  # [F, T, R, dim=3]
+                    T, H, W, _ = rx.shape
+                    ch = ch.reshape(1, T, H * W, 1)  # [F, T, H*W, 1]
+                    rx = rx.reshape(1, T, H * W, 3)  # [F, T, H*W, dim=3]
                     tx = np.expand_dims(tx, axis=0)  # [F, T, dim=3]
+                    result["H"] = H
+                    result["W"] = W
+                    print("Read channel: mean = ", ch.mean())
 
                 ch = torch.from_numpy(ch).to(dtype).to(device)
                 rx = torch.from_numpy(rx).to(dtype).to(device)
@@ -227,24 +232,41 @@ class DataManager(object):
                         ]
                         result["validation"][target_name] = tensors
 
-        if "022" in result["validation"]:
-            result["validation"]["022"] = [
-                result["train"][0][:, 22:23, ...],
-                result["train"][1][:, 22:23, ...],
-                result["train"][2][:, 22:23, ...],
+        vali_idx = []
+        for validation_name in result["validation"]:
+            idx = int(validation_name)
+            if validation_name.isdigit():
+                vali_idx.append(idx)
+
+            result["validation"][validation_name] = [
+                result["train"][0][:, idx : idx + 1, ...],
+                result["train"][1][:, idx : idx + 1, ...],
+                result["train"][2][:, idx : idx + 1, ...],
             ]
 
+        vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]
+        print(f"Load validation name {vali_idx} from train dataset")
+        for i in range(len(vali_idx)):
             result["train"] = [
                 torch.cat(
-                    (result["train"][0][:, 0:22, ...], result["train"][0][:, 23:, ...]),
+                    (
+                        result["train"][0][:, 0 : vali_idx[i], ...],
+                        result["train"][0][:, vali_idx[i] + 1 :, ...],
+                    ),
                     dim=1,
                 ),
                 torch.cat(
-                    (result["train"][1][:, 0:22, ...], result["train"][1][:, 23:, ...]),
+                    (
+                        result["train"][1][:, 0 : vali_idx[i], ...],
+                        result["train"][1][:, vali_idx[i] + 1 :, ...],
+                    ),
                     dim=1,
                 ),
                 torch.cat(
-                    (result["train"][2][:, 0:22, ...], result["train"][2][:, 23:, ...]),
+                    (
+                        result["train"][2][:, 0 : vali_idx[i], ...],
+                        result["train"][2][:, vali_idx[i] + 1 :, ...],
+                    ),
                     dim=1,
                 ),
             ]

@@ -5,7 +5,12 @@ from operator import itemgetter
 
 from src.EM.managers import AbstractManager
 from src.EM.scenes import AbstractScene, Transmitter, Camera, RaySampler
-from src.EM.utils import TrainType, LoadMeshes, LoadPointCloudFromMesh
+from src.EM.utils import (
+    TrainType,
+    LoadMeshes,
+    LoadPointCloudFromMesh,
+    create_2d_meshgrid_tensor,
+)
 
 
 class NeuralScene(AbstractScene):
@@ -38,11 +43,13 @@ class NeuralScene(AbstractScene):
         validation_target = self.opt["validation_target"]
         data_set = self.opt["data_set"]
 
-        self.meshes, AABB = LoadMeshes(
+        self.meshes, AABB_before_scale, self.AABB = LoadMeshes(
             data_path=data_path, device=torch.device("cpu"), dtype=dtype
         )
-        AABB[0] = AABB[0].to(device)
-        AABB[1] = AABB[1].to(device)
+        self.InfoLog(f"Before scaling, scene AABB: {AABB_before_scale.tolist()}")
+        self.InfoLog(f"After scaling, scene AABB: {self.AABB.tolist()}")
+        self.AABB = self.AABB.to(device)
+        AABB_before_scale = AABB_before_scale.to(device)
         self.point_clouds = LoadPointCloudFromMesh(
             meshes=self.meshes, num_pts_samples=4000
         )  # [F, n_pts, 3]
@@ -69,6 +76,11 @@ class NeuralScene(AbstractScene):
             self.is_training, validation_target, device=device, dtype=dtype
         )
         self.validation_target = data["target_list"]  # ["checkerboard"] or ["genz"] ...
+        self.H = None
+        self.W = None
+        if "H" in data and "W" in data:
+            self.H = data["H"]
+            self.W = data["W"]
         # data structure:
         # "train"       -> [ch, rx, tx]
         # "validation"  -> "checkerboard" -> [ch, rx, tx]
@@ -86,11 +98,20 @@ class NeuralScene(AbstractScene):
                 data["train"][1][0:1, ...],
                 data["train"][2][0:1, ...],
             ]
+            AABB_len, scale_dim = (AABB_before_scale[1] - AABB_before_scale[0]).max(
+                dim=0
+            )
             data["train"][1] = (
-                2.0 * (data["train"][1] - AABB[0]) / (AABB[1] - AABB[0]) - 1.0
+                2.0
+                * (data["train"][1] - AABB_before_scale[0, scale_dim.item()])
+                / AABB_len
+                - 1.0
             )
             data["train"][2] = (
-                2.0 * (data["train"][2] - AABB[0]) / (AABB[1] - AABB[0]) - 1.0
+                2.0
+                * (data["train"][2] - AABB_before_scale[0, scale_dim.item()])
+                / AABB_len
+                - 1.0
             )
 
             train_percent = 1.0
@@ -134,16 +155,25 @@ class NeuralScene(AbstractScene):
                 data["validation"][target_name][1][0:1, ...],
                 data["validation"][target_name][2][0:1, ...],
             ]
+            AABB_len, scale_dim = (AABB_before_scale[1] - AABB_before_scale[0]).max(
+                dim=0
+            )
             data["validation"][target_name][1] = (
                 2.0
-                * (data["validation"][target_name][1] - AABB[0])
-                / (AABB[1] - AABB[0])
+                * (
+                    data["validation"][target_name][1]
+                    - AABB_before_scale[0, scale_dim.item()]
+                )
+                / AABB_len
                 - 1.0
             )
             data["validation"][target_name][2] = (
                 2.0
-                * (data["validation"][target_name][2] - AABB[0])
-                / (AABB[1] - AABB[0])
+                * (
+                    data["validation"][target_name][2]
+                    - AABB_before_scale[0, scale_dim.item()]
+                )
+                / AABB_len
                 - 1.0
             )
             # [F, T, R, 1] for ch
@@ -258,6 +288,32 @@ class NeuralScene(AbstractScene):
                         for tx_idx in range(n_transmitter[validation_name])
                     ]
 
+        # Light Probe, cover them on our map
+        self.n_row = 8
+        AABB = self.GetAABB()  # [2, dim] -> {min, max}
+        AABB_len = (AABB[..., 1, :] - AABB[..., 0, :]).abs()  # [dim,]
+        max_len, long_dim = AABB.max(dim=0)
+        aspect = AABB_len / max_len  # [dim,] -> expect to be 0 < aspect <= 1
+        light_probe_shape = (aspect * self.n_row).to(torch.int32).cpu().tolist()
+        H, W = light_probe_shape[1], light_probe_shape[0]
+        light_probe_shape = [1, 1, H, W]
+        light_probe = create_2d_meshgrid_tensor(
+            light_probe_shape, device=self.device, dtype=self.dtype
+        )  # [1, 2, H, W]
+        light_probe = light_probe + 0.5
+        max_HW = max(H, W)
+        light_probe = 2.0 * (light_probe / max_HW) - 1.0
+        light_probe = light_probe.reshape(2, -1).transpose(0, 1)
+        z_mean = self.GetPointCloud(env_index=env_idx)[..., 2:3].mean()
+        light_probe = torch.cat(
+            (light_probe, torch.ones_like(light_probe[:, 0:1]) * z_mean), dim=-1
+        )  # [HW, 3]
+
+        self.light_probe_pos = light_probe
+        self.InfoLog(
+            f"Light Probe position prepared, with shape = {self.light_probe_pos.shape}"
+        )
+
         self.InfoLog("Neural Scene fully prepared.")
 
     def GetData(
@@ -345,6 +401,12 @@ class NeuralScene(AbstractScene):
 
     def GetPointCloud(self, env_index: int) -> torch.Tensor:
         return self.point_clouds[env_index]
+
+    def GetAABB(self) -> torch.Tensor:
+        return self.AABB
+
+    def GetLightProbePosition(self) -> torch.Tensor:
+        return self.light_probe_pos  # [n_probes, 3]
 
     def InfoLog(self, *args, **kwargs):
         return self.log_manager.InfoLog(*args, **kwargs)

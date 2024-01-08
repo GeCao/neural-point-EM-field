@@ -66,6 +66,9 @@ class CoreManager(AbstractManager):
         if self.opt["use_check_point"] or not self.is_training:
             success = self.LoadCheckPoint()
 
+            for g in self.model.optimizer.param_groups:
+                g["lr"] = self.opt["lr"]
+
         if self.is_training:
             self.InfoLog("Start Training with parameters: {}".format(self.opt))
             total_steps = self.opt["total_steps"]
@@ -111,11 +114,11 @@ class CoreManager(AbstractManager):
             ) = self.model.validation_on_scene()
 
             self.validation_vis(
-                epoch=epoch,
-                tx_pos=tx_pos,
-                rx_pos=rx_pos,
-                predicted_gains=predicted_gains,
-                gt_gains=gt_gains,
+                epoch=None,
+                tx_pos=tx_pos.detach().clone(),
+                rx_pos=rx_pos.detach().clone(),
+                predicted_gains=predicted_gains.detach().clone(),
+                gt_gains=gt_gains.detach().clone(),
             )
 
     def validation_vis(
@@ -127,6 +130,64 @@ class CoreManager(AbstractManager):
         gt_gains: torch.Tensor,
     ):
         env_idx = 0
+        save_dir = os.path.join(self._save_path, "imgs")
+        mkdir(save_dir)
+
+        if epoch is not None:
+            save_path = os.path.join(save_dir, f"env{env_idx}_epoch{epoch}.png")
+        else:
+            save_path = os.path.join(save_dir, f"env{env_idx}_validation.png")
+
+        if self.scene.H is not None and self.scene.W is not None:
+            H, W = self.scene.H, self.scene.W
+            aspect = int(W / H)
+            fig, ax = plt.subplots(1, 1, figsize=(aspect * 14, 6))
+            # plt.pcolormesh(new_gains)
+            plt.title("Prediction - Ground truth")
+            np_pred_gains = predicted_gains.cpu().numpy()
+            np_gt_gains = gt_gains.cpu().numpy()
+            np_pred_gains[np.abs(np_gt_gains) < 0.01] = np.inf
+            np_gt_gains[np.abs(np_gt_gains) < 0.01] = np.inf
+            np_pred_gains = np_pred_gains.reshape(H, W)
+            np_gt_gains = np_gt_gains.reshape(H, W)
+            blank_wid = 5
+            blank_gain = np.zeros_like(np_gt_gains[..., 0:blank_wid])
+            blank_gain[...] = np.inf
+            np_pred_gt_gains = np.concatenate(
+                (np_pred_gains, blank_gain, np_gt_gains),
+                axis=-1,
+            )
+            if tx_pos is not None:
+                tx_pos = tx_pos[..., 0:2].reshape(-1, 2)
+                tx_pos[..., 0] = 0.5 * (tx_pos[..., 0] + 1.0) * W
+                tx_pos[..., 1] = 0.5 * (tx_pos[..., 1] + 1.0) * H
+            plt.imshow(np_pred_gt_gains, origin="lower")
+            plt.colorbar()
+            if tx_pos is not None:
+                x, y = (
+                    tx_pos[:, 0].cpu().numpy(),
+                    tx_pos[:, 1].cpu().numpy(),
+                )
+                plt.scatter(x, y, c="red", marker="x")
+
+                x, y = (
+                    (tx_pos[:, 0] + W + blank_wid).cpu().numpy(),
+                    tx_pos[:, 1].cpu().numpy(),
+                )
+                plt.scatter(x, y, c="red", marker="x")
+            plt.savefig(save_path)
+            plt.close()
+
+            import h5py
+
+            np_pred_gains[np_pred_gains == np.inf] = 0.0
+            np_gt_gains[np_gt_gains == np.inf] = 0.0
+            h5f = h5py.File(os.path.join(save_dir, "pred_and_gt.h5"), "w")
+            h5f.create_dataset("pred", data=np_pred_gains.reshape(1, H, W))  # [H, W]
+            h5f.create_dataset("gt", data=np_gt_gains.reshape(1, H, W))  # [H, W]
+            h5f.close()
+
+            return
         verts = self.scene.meshes.verts_list()[env_idx]
         faces = self.scene.meshes.faces_list()[env_idx]
         verts, faces = DeleteFloorOrCeil(verts=verts, faces=faces, axis=2, mode="both")
@@ -160,14 +221,6 @@ class CoreManager(AbstractManager):
         rendered_room = (rendered_room - rendered_room.min()) / (
             rendered_room.max() - rendered_room.min()
         )
-
-        save_dir = os.path.join(self._save_path, "imgs")
-        mkdir(save_dir)
-
-        if epoch is not None:
-            save_path = os.path.join(save_dir, f"env{env_idx}_epoch{epoch}.png")
-        else:
-            save_path = os.path.join(save_dir, f"env{env_idx}_validation.png")
         DumpGrayFigureToRGB(
             save_path,
             pred_color,
@@ -208,7 +261,7 @@ class CoreManager(AbstractManager):
             pt_files = os.listdir(self.GetSavePath())
 
             model_file = None
-            data_set = "bunny-fur-floor"  # TODO:
+            data_set = self.opt["data_set"]  # TODO:
             for filename in pt_files:
                 if ".pt" in filename and data_set in filename:
                     model_file = filename

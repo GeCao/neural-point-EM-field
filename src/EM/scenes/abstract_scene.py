@@ -51,6 +51,14 @@ class AbstractScene(ABC):
         ...
 
     @abstractmethod
+    def GetAABB(self) -> torch.Tensor:
+        ...
+
+    @abstractmethod
+    def GetLightProbePosition(self) -> torch.Tensor:
+        ...
+
+    @abstractmethod
     def InfoLog(self):
         ...
 

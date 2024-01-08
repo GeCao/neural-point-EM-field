@@ -29,11 +29,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set",
         type=str,
-        default="wiindoor",
+        default="sionna_rt",
         choices=["wiindoor", "wi3rooms_0", "wi3rooms_1", "sionna_rt"],
         help="Train?",
     )
-    parser.add_argument("--batch_size", type=int, default=140, help="Size of Batch")
+    parser.add_argument("--batch_size", type=int, default=1000, help="Size of Batch")
     parser.add_argument(
         "--num_workers",
         type=int,
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--lr", type=float, default=0.0001, help="learning rate")
     parser.add_argument(
-        "--use_check_point", type=bool, default=True, help="Use Check Point?"
+        "--use_check_point", type=bool, default=False, help="Use Check Point?"
     )
     parser.add_argument(
         "--save_check_point", type=bool, default=True, help="Save Check Point?"

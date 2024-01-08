@@ -232,7 +232,7 @@ class Camera(object):
         )  # [nrays, n_K, 1]
         topK_ray_cosphi = torch.clamp(topK_ray_cosphi, -1.0, 1.0)
         topK_ray_sinphi = torch.sqrt(1.0 - topK_ray_cosphi * topK_ray_cosphi)
-        topK_ray_distance = ((topK_points - ray_o) * (topK_points - ray_o)).sum(
+        topK_ray_distance = (topK_points - ray_o).norm(
             dim=-1, keepdim=True
         ) * topK_ray_sinphi
 
@@ -247,7 +247,7 @@ class Camera(object):
         #     topK_proj_coord_x * topK_proj_coord_x
         #     + topK_proj_coord_y * topK_proj_coord_y
         # )
-        topK_ray_proj_distance = ((topK_points - ray_o) * (topK_points - ray_o)).sum(
+        topK_ray_proj_distance = (topK_points - ray_o).norm(
             dim=-1, keepdim=True
         ) * topK_ray_cosphi
         topK_ray_azimuth = torch.arctan(topK_proj_coord_x / topK_proj_coord_y)
