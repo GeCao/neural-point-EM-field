@@ -127,12 +127,12 @@ class FeatureDistanceEncoder(nn.Module):
             x_key = torch.empty(
                 n_batch, n_rays, k_closest, 0, device=pts_distance.device
             )
-            x_val = torch.empty(n_batch, n_rays, 1, 0, device=pts_distance.device)
+            x_val = None
         elif features.dim() == 4:
             n_batch, n_rays, n_feat_maps, feat_len = features.shape
             k_closest = 1
             x_key = torch.empty(n_batch, n_rays, 0, device=pts_distance.device)
-            x_val = torch.empty(n_batch, 1, 0, device=pts_distance.device)
+            x_val = None
         else:
             raise RuntimeError(
                 f"Dim of feature should be 4/5, your input is {features.dim()}"
@@ -173,7 +173,11 @@ class FeatureDistanceEncoder(nn.Module):
                 1.0 / tx_distance,
             )
             enc_tx_dist = self.txEncodingLen(tx_distance)
-            x_val = torch.cat([x_val, enc_tx_dist], dim=-1)
+            x_val = (
+                enc_tx_dist
+                if x_val is None
+                else torch.cat([x_val, enc_tx_dist], dim=-1)
+            )
 
         if self.used_distances["tx_azimuth"]:
             if not self.tx_az_2d:
@@ -187,11 +191,19 @@ class FeatureDistanceEncoder(nn.Module):
                     dim=-1,
                 )
 
-            x_val = torch.cat([x_val, enc_tx_azimuth], dim=-1)
+            x_val = (
+                enc_tx_azimuth
+                if x_val is None
+                else torch.cat([x_val, enc_tx_azimuth], dim=-1)
+            )
 
         if self.used_distances["tx_elevation"]:
             enc_tx_elevation = self.txEncodingAng(tx_elevation)
-            x_val = torch.cat([x_val, enc_tx_elevation], dim=-1)
+            x_val = (
+                enc_tx_elevation
+                if x_val is None
+                else torch.cat([x_val, enc_tx_elevation], dim=-1)
+            )
 
         if features.dim() == 5:
             x_key = x_key[..., None, :].expand(

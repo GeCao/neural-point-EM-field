@@ -69,7 +69,7 @@ class SceneDataSet(Dataset):
                     rx_idx = (index % (num_tx * num_rx)) % num_rx
 
                     if self.train_type == int(TrainType.VALIDATION):
-                        tx_idx = 0  # TODO: tx_idx=3 only
+                        tx_idx = 3  # TODO: tx_idx=3 only
 
                     return self.scene.RaySample(
                         env_idx=env_idx,
@@ -136,18 +136,10 @@ class DataManager(object):
         """
         data_path = self.GetDataPath()
 
-        if "coverage_map" in str(data_path):
+        if "sionna" in str(data_path):
             # Different data management
             data_files = os.listdir(data_path)
-            data_files = [filename for filename in data_files if "obj" not in filename]
-            data_files = [filename for filename in data_files if "geom" not in filename]
-            # TODO: Sort directories
-            data_files.sort()
-            target_list = ["024"]
-        elif "rt" in str(data_path):
-            # Different data management
-            data_files = os.listdir(data_path)
-            target_list = ["023"]
+            target_list = ["041"]
         else:
             target_list = ["checkerboard", "genz", "gendiag"]
             if validation_target == "all":
@@ -179,22 +171,58 @@ class DataManager(object):
                 # load train/test data:
                 data = h5py.File(os.path.join(data_path, filename))
                 if "channels" in data:
+                    # Note:
+                    # departure: from tx
+                    # arrival: to rx
                     ch = np.array(
-                        data["channels"][0:1, :, 0, :, 0, :]
-                    )  # [F, T, 1, R, D=8, K] -> [F, T, R, K], float32
-                    # gain = 10 * log10(strength)
-                    eps = 0.01
-                    invalid = np.abs(ch) < eps
-                    ch = np.power(10.0, 0.1 * ch)
-                    ch[invalid] = 0.0
-                    ch = ch.sum(axis=-1, keepdims=True)  # [F, T, R, 1], float32
-                    ch = 10.0 * np.log10(ch)
-                    ch[ch == np.inf] = 0.0
+                        data["channels"][0:1, :, 0, :, :, :]
+                    )  # [F, T, 1, R, D=8, K] -> [F, T, R, D=8, n_rays], float32
+                    # In original data, gain-phase-time-elevation-azimuth-elevation-azimuth-validality
+                    # What we want, gain-phase-time-azimuth-elevation-azimuth-elevation-validality
+                    ch = np.concatenate(
+                        (
+                            ch[..., 0:3, :],
+                            ch[..., 4:5, :],
+                            ch[..., 3:4, :],
+                            ch[..., 6:7, :],
+                            ch[..., 5:6, :],
+                            ch[..., 7:, :],
+                        ),
+                        axis=-2,
+                    )
+                    # 1 - phase: [-PI, PI]
+                    # 4/6 - elevation: [0, PI]
+                    # 3/5 - azimuth: [0, 2*PI]
 
                     rx = np.array(
                         data["rx"][0:1, :, 0, ...]
                     )  # [F, T, 1, R, dim=3] -> [F, T, R, dim=3]
                     tx = np.array(data["tx"][0:1, ...])  # [F, T, dim=3]
+                    interactions = np.array(
+                        data["interactions"][0:1, :, 0, ...]
+                    )  # [F, T, 1, R, K, I, dim=4] -> [F, T, R, n_rays, I, dim=4]
+                    # intersects = np.array(
+                    #     data["interactions"][0:1, :, 0, ...]
+                    # )  # [F, T, 1, R, K, I, dim=4] -> [F, T, R, n_rays, I, dim=4]
+                    # print("rx = ", rx[0, 0, 0])
+                    # print("tx = ", tx[0, 0])
+                    # print("intersects = ", intersects[0, 0, 0, 0])
+                    # print("ch = ", ch[0, 2, 2546, :, :])
+                    # azimuth_d = ch[0, 0, 0, 5, 0]
+                    # elevation_d = ch[0, 0, 0, 6, 0]
+                    # ch_dir_d = np.array(
+                    #     [
+                    #         np.cos(azimuth_d) * np.sin(elevation_d),
+                    #         np.sin(azimuth_d) * np.sin(elevation_d),
+                    #         np.cos(elevation_d),
+                    #     ]
+                    # )
+                    # rxtx_dir_d = (rx[0, 0, 0] - tx[0, 0]) / np.linalg.norm(
+                    #     (rx[0, 0, 0] - tx[0, 0])
+                    # )
+                    # print("ch_dir_d = ", ch_dir_d)
+                    # print("rxtx_dir_d = ", rxtx_dir_d)
+                    # exit(0)
                 elif "gain" in data:
                     ch = np.array(data["gain"])  # [T, H, W, 1]
                     rx = np.array(data["rx"])  # [T, H, W, dim=3]
@@ -206,69 +234,92 @@ class DataManager(object):
                     result["H"] = H
                     result["W"] = W
                     print("Read channel: mean = ", ch.mean())
+                    interactions = None
 
                 ch = torch.from_numpy(ch).to(dtype).to(device)
                 rx = torch.from_numpy(rx).to(dtype).to(device)
                 tx = torch.from_numpy(tx).to(dtype).to(device)
+                if interactions is not None:
+                    interactions = torch.from_numpy(interactions).to(dtype).to(device)
 
                 if target_name is "train":
                     if result["train"] is None:
-                        result["train"] = [ch, rx, tx]
+                        result["train"] = (
+                            [ch, rx, tx]
+                            if interactions is None
+                            else [ch, rx, tx, interactions]
+                        )
                     else:
                         tensors = [
                             torch.cat((result[target_name][0], ch), dim=0),
                             torch.cat((result[target_name][1], rx), dim=0),
                             torch.cat((result[target_name][2], tx), dim=0),
                         ]
+                        if interactions is not None:
+                            tensors = tensors + [
+                                torch.cat((result[target_name][3], interactions), dim=0)
+                            ]
+
                         result["train"] = tensors
                 else:
                     if result["validation"][target_name] is None:
-                        result["validation"][target_name] = [ch, rx, tx]
+                        result["validation"][target_name] = (
+                            [ch, rx, tx]
+                            if interactions is None
+                            else [ch, rx, tx, interactions]
+                        )
                     else:
                         tensors = [
                             torch.cat((result[target_name][0], ch), dim=0),
                             torch.cat((result[target_name][1], rx), dim=0),
                             torch.cat((result[target_name][2], tx), dim=0),
                         ]
+                        if interactions is not None:
+                            tensors = tensors + [
+                                torch.cat((result[target_name][3], interactions), dim=0)
+                            ]
+
                         result["validation"][target_name] = tensors
 
-        vali_idx = []
-        for validation_name in result["validation"]:
-            idx = int(validation_name)
-            if validation_name.isdigit():
-                vali_idx.append(idx)
+        if "sionna" in str(data_path):
+            vali_idx = []
+            for validation_name in result["validation"]:
+                idx = int(validation_name)
+                if validation_name.isdigit():
+                    vali_idx.append(idx)
 
-            result["validation"][validation_name] = [
-                result["train"][0][:, idx : idx + 1, ...],
-                result["train"][1][:, idx : idx + 1, ...],
-                result["train"][2][:, idx : idx + 1, ...],
-            ]
+                result["validation"][validation_name] = [
+                    result["train"][0][:, idx : idx + 1, ...],
+                    result["train"][1][:, idx : idx + 1, ...],
+                    result["train"][2][:, idx : idx + 1, ...],
+                ]
 
-        vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]
-        print(f"Load validation name {vali_idx} from train dataset")
-        for i in range(len(vali_idx)):
-            result["train"] = [
-                torch.cat(
-                    (
-                        result["train"][0][:, 0 : vali_idx[i], ...],
-                        result["train"][0][:, vali_idx[i] + 1 :, ...],
+            vali_idx.append(23)
+            vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]
+            print(f"Load validation name {vali_idx} from train dataset")
+            for i in range(len(vali_idx)):
+                result["train"] = [
+                    torch.cat(
+                        (
+                            result["train"][0][:, 0 : vali_idx[i], ...],
+                            result["train"][0][:, vali_idx[i] + 1 :, ...],
+                        ),
+                        dim=1,
                     ),
-                    dim=1,
-                ),
-                torch.cat(
-                    (
-                        result["train"][1][:, 0 : vali_idx[i], ...],
-                        result["train"][1][:, vali_idx[i] + 1 :, ...],
+                    torch.cat(
+                        (
+                            result["train"][1][:, 0 : vali_idx[i], ...],
+                            result["train"][1][:, vali_idx[i] + 1 :, ...],
+                        ),
+                        dim=1,
                     ),
-                    dim=1,
-                ),
-                torch.cat(
-                    (
-                        result["train"][2][:, 0 : vali_idx[i], ...],
-                        result["train"][2][:, vali_idx[i] + 1 :, ...],
+                    torch.cat(
+                        (
+                            result["train"][2][:, 0 : vali_idx[i], ...],
+                            result["train"][2][:, vali_idx[i] + 1 :, ...],
+                        ),
+                        dim=1,
                     ),
-                    dim=1,
-                ),
-            ]
+                ]
 
         return result

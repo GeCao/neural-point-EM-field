@@ -1,2 +1,3 @@
 from .neural_renderer import PointLightField, LightFieldNet
+from .neural_renderer_ablation import PointLightFieldAblation, LightFieldNetAblation
 from .renderer import PointLightFieldRenderer

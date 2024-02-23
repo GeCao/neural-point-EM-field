@@ -233,7 +233,7 @@ def DeleteFloorOrCeil(
     verts = verts.reshape(-1, 3)
     faces = faces.reshape(-1, 3)
 
-    eps = 1e-4
+    eps = 0.5
     z_min = verts[..., axis].min()
     z_max = verts[..., axis].max()
     face_verts = torch.index_select(
@@ -301,7 +301,11 @@ def RenderRoom(
 
 
 def SplatFromParticlesToGrid(
-    particles: torch.Tensor, attributes: torch.Tensor, res_x: int, res_y: int
+    particles: torch.Tensor,
+    attributes: torch.Tensor,
+    res_x: int,
+    res_y: int,
+    support_radius: int = 8,
 ) -> torch.Tensor:
     dtype = particles.dtype
     device = particles.device
@@ -339,7 +343,7 @@ def SplatFromParticlesToGrid(
         domain_bounding_box[..., 0] + cell_size * simulation_size
     )
 
-    kernel = Quadratic(support_radius=4)
+    kernel = Linear(support_radius=support_radius)
     splatter = Splatter(
         kernel=kernel,
         cell_size=cell_size,

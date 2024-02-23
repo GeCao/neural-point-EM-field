@@ -5,12 +5,12 @@ import torch
 import pywavefront
 import matplotlib.pyplot as plt
 import open3d as o3d
+from PIL import Image
 from typing import List
 from plyfile import PlyData, PlyElement
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import Textures
 from pytorch3d.ops import sample_points_from_meshes
-from pyevtk.hl import pointsToVTK
 
 
 def mkdir(path: str):
@@ -167,22 +167,23 @@ def DumpCFGFile(save_path: str, point_clouds: torch.Tensor):
 
 def DumpGrayFigureToRGB(
     save_path: str,
-    color: torch.Tensor,
+    pred_color: torch.Tensor,
     gt_color: torch.Tensor = None,
     mask: torch.Tensor = None,
     extra_spot: torch.Tensor = None,
 ) -> None:
-    if len(color.shape) == 4:
-        _, _, H, W = color.shape
-    elif len(color.shape) == 3 and color.shape[-1] == 1:
+    eps = 1e-6
+    if len(pred_color.shape) == 4:
+        _, _, H, W = pred_color.shape
+    elif len(pred_color.shape) == 3 and pred_color.shape[-1] == 1:
         H, W, _ = color.shape
-    elif len(color.shape) == 3 and color.shape[0] == 1:
-        _, H, W = color.shape
-    elif len(color.shape) == 2:
-        H, W = color.shape
+    elif len(pred_color.shape) == 3 and pred_color.shape[0] == 1:
+        _, H, W = pred_color.shape
+    elif len(pred_color.shape) == 2:
+        H, W = pred_color.shape
     else:
         raise RuntimeError(
-            f"Can not recognize input gray color with shape {color.shape}"
+            f"Can not recognize input gray color with shape {pred_color.shape}"
         )
 
     blank_wid = 5
@@ -191,19 +192,19 @@ def DumpGrayFigureToRGB(
         extra_spot[..., 0] = 0.5 * (extra_spot[..., 0] + 1.0) * W
         extra_spot[..., 1] = 0.5 * (extra_spot[..., 1] + 1.0) * H
 
-    color = color.reshape(H, W)
+    pred_color = pred_color.reshape(H, W)
     if gt_color is not None:
         gt_color = gt_color.reshape(H, W)
 
     if mask is not None:
         mask = mask.reshape(H, W).to(torch.bool)
-        color[mask] = 0.0
+        pred_color[mask] = 0.0
         if gt_color is not None:
             gt_color[mask] = 0.0
 
     if gt_color is not None:
-        blank = torch.zeros((H, blank_wid)).to(color.device).to(color.dtype)
-        color = torch.cat((color, blank, gt_color), dim=-1)
+        blank = torch.zeros((H, blank_wid)).to(pred_color.device).to(pred_color.dtype)
+        color = torch.cat((pred_color, blank, gt_color), dim=-1)
 
     color[color == 0.0] = np.inf
 
@@ -226,6 +227,40 @@ def DumpGrayFigureToRGB(
     plt.colorbar()
     plt.savefig(save_path)
     plt.close()
+
+    # Normalization
+    if mask is not None:
+        inf_mask = torch.stack([mask, mask, mask, mask], axis=-1).cpu().numpy()
+        inf_mask = np.flip(inf_mask, axis=0)
+
+        zero_mask = (gt_color == 0.0).reshape(H, W, 1).repeat(1, 1, 4).cpu().numpy()
+        zero_mask = np.flip(zero_mask, axis=0)
+    pred_color = (pred_color - pred_color.min()) / (gt_color.max() - gt_color.min())
+    gt_color = (gt_color - gt_color.min()) / (gt_color.max() - gt_color.min())
+
+    print("pred = ", gt_color.min(), gt_color.max(), gt_color.mean())
+    print("gt = ", gt_color.min(), gt_color.max(), gt_color.mean())
+
+    save_dir = os.path.dirname(save_path)
+    cm = plt.get_cmap("rainbow")
+    pred_image = np.flip(pred_color.reshape(H, W).cpu().numpy(), axis=0)
+    # if pred_image.max() > 1 + eps:
+    #     pred_image = pred_image / gt_color.max().item()
+    pred_image = cm(pred_image) * 255.0
+    pred_image[inf_mask] = np.inf
+    pred_image[zero_mask] = np.inf
+    Image.fromarray((pred_image).astype(np.uint8)).save(
+        os.path.join(save_dir, "pred_gain.png")
+    )
+    gt_image = np.flip(gt_color.reshape(H, W).cpu().numpy(), axis=0)
+    # if gt_image.max() > 1 + eps:
+    #     gt_image = gt_image / gt_color.max().item()
+    gt_image = cm(gt_image) * 255.0
+    gt_image[inf_mask] = np.inf
+    gt_image[zero_mask] = np.inf
+    Image.fromarray((gt_image).astype(np.uint8)).save(
+        os.path.join(save_dir, "gt_gain.png")
+    )
 
 
 def create_2d_meshgrid_tensor(

@@ -76,14 +76,17 @@ class LightFieldNet(nn.Module):
         self.pts_linears = nn.ModuleList(
             [Layer(self.input_ch, W, z_dim=n_pt_feat)]
             + [
-                Layer(W, W, z_dim=n_pt_feat)
-                if i not in self.skips
-                else Layer(W + self.input_ch, W, z_dim=n_pt_feat)
+                (
+                    Layer(W, W, z_dim=n_pt_feat)
+                    if i not in self.skips
+                    else Layer(W + self.input_ch, W, z_dim=n_pt_feat)
+                )
                 for i in range(D - 1)
             ]
         )
 
-        self.ch_linear = DenseLayer(W, output_ch, activate=False)
+        self.n_SH = 9
+        self.ch_linear = DenseLayer(W, output_ch * self.n_SH, activate=False)
         self.SH_basis_hlp = [
             0.5 / math.sqrt(math.pi),
             math.sqrt(3.0 / (4.0 * math.pi)),
@@ -99,7 +102,6 @@ class LightFieldNet(nn.Module):
     def forward(
         self,
         feat: torch.Tensor,
-        probe_mask: Tuple[List[int]],
         ray_d: torch.Tensor,
         rx_to_probe_and_tx_distance: torch.Tensor,
         rx_to_probe_and_tx_azimuth: torch.Tensor,
@@ -108,7 +110,6 @@ class LightFieldNet(nn.Module):
         """
         Args:
             feat                             (torch.Tensor):                [B, n_rays, n_feat]
-            probe_mask                       (Tuple(List[int], List[int])): x[closest_mask] = [B*n_rays, dim=3]
 
             ray_d                            (torch.Tensor):                [B, n_rays+1, dim=3]
             rx_to_probe_and_tx_distance      (torch.Tensor):                [B, n_rays+1, 1]
@@ -144,13 +145,13 @@ class LightFieldNet(nn.Module):
                 h = torch.cat([inputs, h], -1)
 
         out = self.ch_linear(h, z=z)
-        out = -F.relu(out)  # torch.sigmoid(out)
-        # out = [B, n_rays+1, 9]
+        out = out.reshape(n_batch, n_rays + 1, self.output_ch, self.n_SH)
+        # out = [B, n_rays+1, ch*9]
 
         # Try SH-encoder (with n = 3)
-        assert self.output_ch == 9
-        normal = F.normalize(-ray_d[:, :-1, :], dim=-1)  # [B, n_rays, 3]
-        SH_basis = torch.zeros_like(out[:, :-1, :])  # [B, n_rays, 9]
+        assert self.n_SH == 9
+        normal = F.normalize(-ray_d[:, :-1, None, :], dim=-1)  # [B, n_rays, ch, 3]
+        SH_basis = torch.zeros_like(out[:, :-1, :, :])  # [B, n_rays, ch, 9]
         SH_basis[..., 0] = self.SH_basis_hlp[0]
         SH_basis[..., 1] = self.SH_basis_hlp[1] * normal[..., 2]
         SH_basis[..., 2] = self.SH_basis_hlp[2] * normal[..., 1]
@@ -170,11 +171,53 @@ class LightFieldNet(nn.Module):
         # n_rays + 1 Decompose:
         #     n_rays: SH_coeff * SH_basis (sample from light probe)
         #     1:      Sum pooling         (sample from LOS)
-        out = (out[:, :-1, :] * SH_basis).sum(dim=-1).sum(dim=-1) + out[:, -1, :].sum(
-            dim=-1
-        )
 
-        return out.view(n_batch, 1)
+        if self.output_ch == 1:
+            out = (out[:, :-1, :, :] * SH_basis).sum(dim=-1)  # [B, n_rays, ch]
+            # Only take gain as output
+            out = out.sum(dim=1) + out[:, -1, :, :].sum(dim=-1)  # [B, ch]
+            out = out.view(n_batch, self.output_ch)
+        else:
+            # Take all the channel
+            out = (out[:, :-1, :, :] * SH_basis).sum(dim=-1)
+            out = out.view(n_batch, n_rays, self.output_ch)
+            if self.output_ch >= 7:
+                out = torch.cat(
+                    (
+                        out[..., 0:1],
+                        2.0 * math.pi * torch.sigmoid(out[..., 1:2]) - math.pi,
+                        out[..., 2:3],
+                        2.0 * math.pi * torch.sigmoid(out[..., 3:4]),
+                        math.pi * torch.sigmoid(out[..., 4:5]),
+                        2.0 * math.pi * torch.sigmoid(out[..., 5:6]),
+                        math.pi * torch.sigmoid(out[..., 6:7]),
+                        out[..., 7:],
+                    ),
+                    dim=-1,
+                )
+            elif self.output_ch == 6:
+                out = torch.cat(
+                    (
+                        out[..., 0:1],
+                        2.0 * math.pi * torch.sigmoid(out[..., 1:2]) - math.pi,
+                        out[..., 2:3],
+                        F.normalize(out[..., 3:6], dim=-1),
+                    ),
+                    dim=-1,
+                )
+            elif self.output_ch == 3:
+                out = torch.cat(
+                    (
+                        out[..., 0:1],
+                        2.0 * math.pi * torch.sigmoid(out[..., 1:2]) - math.pi,
+                        out[..., 2:3],
+                    ),
+                    dim=-1,
+                )
+            else:
+                raise RuntimeError("output ch for neural render is not correctly set")
+
+        return out
 
 
 # Takes Points, weights  and rays and maps to color
@@ -195,6 +238,7 @@ class PointLightField(nn.Module):
         },
         new_encoding=False,
         sky_dome: bool = True,
+        output_ch: int = 1,
         device: torch.device = torch.device("cpu"),
         dtype=torch.float32,
     ):
@@ -269,12 +313,13 @@ class PointLightField(nn.Module):
                 f"The feature encode strategy of {feature_encoder} has not been implemented yet."
             )
 
+        # TODO:
         self._LightField = (
             LightFieldNet(
                 n_frequ_pos_encoding=4,
                 n_feat_in=n_feat_in,
                 n_pt_feat=self.n_pt_features,
-                output_ch=9,
+                output_ch=output_ch,
                 D=lf_architecture["D"],
                 W=lf_architecture["W"],
                 multires=lf_architecture["poseEnc"],
@@ -295,123 +340,9 @@ class PointLightField(nn.Module):
                 .to(dtype)
             )
 
-    def _add_sky_features(
-        self,
-        ray_dirs: torch.Tensor,
-        sky_mask: torch.Tensor,
-        feat: torch.Tensor,
-        x_dist: torch.Tensor,
-        x_proj: torch.Tensor,
-        x_pitch: torch.Tensor,
-        x_azimuth: torch.Tensor,
-        tx_dist: torch.Tensor,
-        tx_azimuth: torch.Tensor,
-        tx_elevation: torch.Tensor,
-    ):
-        """Module for preparing sky feature encoding
-        Args:
-            ray_dirs           (torch.Tensor):                [B, n_rays, 3]
-            sky_mask           (torch.Tensor):                [B, n_rays]
-            feat               (torch.Tensor):                [B, n_rays, K_closest, 1, n_feat]
-            x_dist             (torch.Tensor):                [B, n_rays, K_closest, 1]
-            x_proj             (torch.Tensor):                [B, n_rays, K_closest, 1]
-            x_pitch            (torch.Tensor):                [B, n_rays, K_closest, 1]
-            x_azimuth          (torch.Tensor):                [B, n_rays, K_closest, 1]
-            ...
-
-        Returns:
-            sky_rays           (torch.Tensor):                [1, n_sky_rays, 3]
-            sky_feat           (torch.Tensor):                [1, n_sky_rays, K_closest+1, 1, n_feat]
-            sky_dist           (torch.Tensor):                [1, n_sky_rays, K_closest+1, 1]
-            sky_proj           (torch.Tensor):                [1, n_sky_rays, K_closest+1, 1]
-            sky_pitch          (torch.Tensor):                [1, n_sky_rays, K_closest+1, 1]
-            sky_azimuth        (torch.Tensor):                [1, n_sky_rays, K_closest+1, 1]
-            ...
-        """
-        device = ray_dirs.device
-        dtype = ray_dirs.dtype
-
-        sky_rays = ray_dirs[sky_mask].unsqueeze(0)  # [1, n_sky, 3]
-        n_sky_rays = sky_rays.shape[-2]
-
-        sky_feat = feat[sky_mask].unsqueeze(0)  # [1, n_sky, K_closest, 1, n_feat]
-        sky_feat = torch.cat(
-            [
-                sky_feat,
-                self._sky_latent.expand(
-                    list(sky_feat.shape[:2]) + [1] + list(sky_feat.shape[3:])
-                ),
-            ],
-            dim=2,
-        )  # [1, n_sky, K_closest+1, 1, n_feat]
-        sky_dist = torch.cat(
-            [
-                x_dist[sky_mask].unsqueeze(0),
-                torch.zeros([1, n_sky_rays, 1, 1]).to(device).to(dtype),
-            ],
-            dim=-2,
-        )  # [1, n_sky, K_closest+1, 1]
-        sky_proj = torch.cat(
-            [
-                x_proj[sky_mask].unsqueeze(0),
-                torch.zeros([1, n_sky_rays, 1, 1]).to(device).to(dtype),
-            ],
-            dim=-2,
-        )  # [1, n_sky, K_closest+1, 1]
-        sky_pitch = torch.cat(
-            [
-                x_pitch[sky_mask].unsqueeze(0),
-                torch.zeros([1, n_sky_rays, 1, 1]).to(device).to(dtype),
-            ],
-            dim=-2,
-        )  # [1, n_sky, K_closest+1, 1]
-        sky_azimuth = torch.cat(
-            [
-                x_azimuth[sky_mask].unsqueeze(0),
-                torch.zeros([1, n_sky_rays, 1, 1]).to(device).to(dtype),
-            ],
-            dim=-2,
-        )  # [1, n_sky, K_closest+1, 1]
-
-        sky_tx_dist = torch.cat(
-            [
-                tx_dist[sky_mask].unsqueeze(0),
-                torch.zeros([1, n_sky_rays, 1, 1]).to(device).to(dtype),
-            ],
-            dim=-2,
-        )  # [1, n_sky, K_closest+1, 1]
-        sky_tx_azimuth = torch.cat(
-            [
-                tx_azimuth[sky_mask].unsqueeze(0),
-                torch.zeros([1, n_sky_rays, 1, 1]).to(device).to(dtype),
-            ],
-            dim=-2,
-        )  # [1, n_sky, K_closest+1, 1]
-        sky_tx_elevation = torch.cat(
-            [
-                tx_elevation[sky_mask].unsqueeze(0),
-                torch.zeros([1, n_sky_rays, 1, 1]).to(device).to(dtype),
-            ],
-            dim=-2,
-        )  # [1, n_sky, K_closest+1, 1]
-
-        return (
-            sky_rays,
-            sky_feat,
-            sky_dist,
-            sky_proj,
-            sky_pitch,
-            sky_azimuth,
-            sky_tx_dist,
-            sky_tx_azimuth,
-            sky_tx_elevation,
-        )
-
     def forward(
         self,
         x: torch.Tensor,
-        light_probe_pos: torch.Tensor,
-        probe_mask: Tuple[List[int]],
         probe_pts_mask: List[int],
         ray_dirs: torch.Tensor,
         rx_to_probe_and_tx_distance: torch.Tensor,
@@ -428,7 +359,6 @@ class PointLightField(nn.Module):
             x                                (torch.Tensor):                [1, n_pts, dim=3]
             light_probe_pos                  (torch.Tensor):                [n_probes, dim=3]
 
-            probe_mask                       (Tuple(List[int], List[int])): x[closest_mask] = [B*n_rays, dim=3]
             probe_pts_mask                   (List[int]):                   x[probe_pts_mask] = [B*n_rays*K_closest, ...]
 
             ray_dirs                         (torch.Tensor):                [B, n_rays+1, dim=3]
@@ -444,8 +374,8 @@ class PointLightField(nn.Module):
         Returns:
             torch.Tensor: rendered wireless channels with shape = [B, n_rays, 3] (TODO:)
         """
-        batch_size = probe_to_pts_and_tx_distance.shape[0]
-        n_rays = probe_to_pts_and_tx_distance.shape[1]
+        batch_size = rx_to_probe_and_tx_distance.shape[0]
+        n_rays = rx_to_probe_and_tx_distance.shape[1] - 1
         K_closest = probe_to_pts_and_tx_distance.shape[2] - 1
         n_feat = self.n_pt_features
         n_pts = x.shape[-2]
@@ -485,7 +415,7 @@ class PointLightField(nn.Module):
             feat = torch.sum(feat[..., 0, :], dim=-2)  # [B, n_rays, n_features]
         else:
             feat, attn_weights = self.AttentionModule(
-                directions=probe_to_pts_and_tx_dir,
+                directions=probe_to_pts_and_tx_dir[..., -1:, :],
                 features=feat,
                 pts_distance=probe_to_pts_and_tx_distance[..., :-1, :],
                 pts_azimuth=probe_to_pts_and_tx_azimuth[..., :-1, :],
@@ -498,7 +428,6 @@ class PointLightField(nn.Module):
         # 5. Predict Light field output with pre-baked features and ray directions
         color = self._LightField(
             feat,
-            probe_mask,
             ray_dirs,
             rx_to_probe_and_tx_distance,
             rx_to_probe_and_tx_azimuth,

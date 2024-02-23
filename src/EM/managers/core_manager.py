@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import torch
+import time
 from typing import Dict
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -26,7 +27,10 @@ class CoreManager(AbstractManager):
         self._demo_path = os.path.abspath(os.curdir)
         self._root_path = os.path.abspath(os.path.join(self._demo_path, ".."))
         self._data_path = os.path.join(self._root_path, "data", opt["data_set"])
-        self._save_path = os.path.join(self._root_path, "save", opt["data_set"])
+        ablation_prefix = "ablation" if scene_opt["lightfield"]["is_ablation"] else ""
+        self._save_path = os.path.join(
+            self._root_path, "save", f"{opt['data_set']}_{ablation_prefix}"
+        )
         mkdir(self._save_path)
 
         print("The root path of our project: ", self._root_path)
@@ -105,6 +109,7 @@ class CoreManager(AbstractManager):
                             self.SaveCheckPoint(epoch=epoch, loss=loss.item())
         else:
             # Validation:
+            start_time = time.time()
             (
                 test_loss,
                 tx_pos,
@@ -112,6 +117,8 @@ class CoreManager(AbstractManager):
                 predicted_gains,
                 gt_gains,
             ) = self.model.validation_on_scene()
+            end_time = time.time()
+            self.InfoLog(f"time for validation = {end_time - start_time}")
 
             self.validation_vis(
                 epoch=None,
@@ -197,9 +204,9 @@ class CoreManager(AbstractManager):
             textures=None,
         )
         pts = LoadPointCloudFromMesh(
-            meshes=meshes, num_pts_samples=1000
+            meshes=meshes, num_pts_samples=5000
         )  # [F, n_pts, 3]
-        rendered_room = RenderRoom(pts[env_idx], res_x=128)
+        rendered_room = RenderRoom(pts[env_idx], res_x=256)
         pred_color = SplatFromParticlesToGrid(
             particles=rx_pos[..., 0:2],
             attributes=predicted_gains,

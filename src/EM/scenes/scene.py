@@ -37,6 +37,7 @@ class NeuralScene(AbstractScene):
         self.log_manager = core_manager._log_manager
 
         self.K_closest = scene_opt["lightfield"].get("k_closest", 8)
+        self.is_ablation = scene_opt["lightfield"]["is_ablation"]
 
         data_path = core_manager.GetDataPath()
         self.is_training = self.opt["is_training"]
@@ -94,9 +95,7 @@ class NeuralScene(AbstractScene):
 
         if self.is_training:
             data["train"] = [
-                data["train"][0][0:1, ...],
-                data["train"][1][0:1, ...],
-                data["train"][2][0:1, ...],
+                data["train"][i][0:1, ...] for i in range(len(data["train"]))
             ]
             AABB_len, scale_dim = (AABB_before_scale[1] - AABB_before_scale[0]).max(
                 dim=0
@@ -119,9 +118,7 @@ class NeuralScene(AbstractScene):
             # TODO: rx_split
 
             self.nodes["train"] = [
-                data["train"][0][:, 0:tx_split, ...],
-                data["train"][1][:, 0:tx_split, ...],
-                data["train"][2][:, 0:tx_split, ...],
+                data["train"][i][:, 0:tx_split, ...] for i in range(len(data["train"]))
             ]
             # [F, T, R, 1] for ch
             self.n_train_env = self.nodes["train"][0].shape[0]  # F
@@ -129,9 +126,7 @@ class NeuralScene(AbstractScene):
             self.n_train_receivers = self.nodes["train"][0].shape[2]  # R
 
             self.nodes["test"] = [
-                data["train"][0][:, tx_split:, ...],
-                data["train"][1][:, tx_split:, ...],
-                data["train"][2][:, tx_split:, ...],
+                data["train"][i][:, tx_split:, ...] for i in range(len(data["train"]))
             ]
             # [F, T, R, 1] for ch
             self.n_test_env = self.nodes["test"][0].shape[0]  # F
@@ -151,9 +146,8 @@ class NeuralScene(AbstractScene):
         self.n_validation_receivers = {}
         for target_name in self.validation_target:
             data["validation"][target_name] = [
-                data["validation"][target_name][0][0:1, ...],
-                data["validation"][target_name][1][0:1, ...],
-                data["validation"][target_name][2][0:1, ...],
+                data["validation"][target_name][i][0:1, ...]
+                for i in range(len(data["validation"][target_name]))
             ]
             AABB_len, scale_dim = (AABB_before_scale[1] - AABB_before_scale[0]).max(
                 dim=0
@@ -177,21 +171,16 @@ class NeuralScene(AbstractScene):
                 - 1.0
             )
             # [F, T, R, 1] for ch
-            self.n_validation_env[target_name] = data["validation"][target_name][
-                0
-            ].shape[
-                0
-            ]  # F
-            self.n_validation_transmitter[target_name] = data["validation"][
-                target_name
-            ][0].shape[
-                1
-            ]  # T
-            self.n_validation_receivers[target_name] = data["validation"][target_name][
-                0
-            ].shape[
-                2
-            ]  # R
+            (
+                self.n_validation_env[target_name],
+                self.n_validation_transmitter[target_name],
+                self.n_validation_receivers[target_name],
+            ) = data["validation"][target_name][0].shape[
+                0:3
+            ]  # F, T, R
+            self.gain_only = (
+                True if data["validation"][target_name][0].shape[-1] == 1 else False
+            )
 
             self.log_manager.InfoLog(
                 f"[Validation]: env={self.n_validation_env}, tx={self.n_validation_transmitter}, rx={self.n_validation_receivers}"
@@ -238,13 +227,10 @@ class NeuralScene(AbstractScene):
         )
         env_idx = 0
         for train_type in train_types:
-            _, rx_data, tx_data = self.GetData(
-                train_type=train_type, validation_name=self.validation_target[0]
-            )
-            n_transmitter = self.GetNumTransmitters(train_type=train_type)
-            n_receivers = self.GetNumReceivers(train_type=train_type)
-
             if train_type != int(TrainType.VALIDATION):
+                _, rx_data, tx_data = self.GetData(train_type=train_type)[0:3]
+                n_transmitter = self.GetNumTransmitters(train_type=train_type)
+                n_receivers = self.GetNumReceivers(train_type=train_type)
                 self.transmitters[train_type] = [
                     Transmitter(
                         source_location=tx_data[env_idx, tx_idx],
@@ -267,6 +253,11 @@ class NeuralScene(AbstractScene):
                 ]
             else:
                 for validation_name in self.validation_target:
+                    _, rx_data, tx_data = self.GetData(
+                        train_type=train_type, validation_name=validation_name
+                    )[0:3]
+                    n_transmitter = self.GetNumTransmitters(train_type=train_type)
+                    n_receivers = self.GetNumReceivers(train_type=train_type)
                     self.transmitters[train_type][validation_name] = [
                         Transmitter(
                             source_location=tx_data[env_idx, tx_idx],
@@ -289,30 +280,31 @@ class NeuralScene(AbstractScene):
                     ]
 
         # Light Probe, cover them on our map
-        self.n_row = 8
-        AABB = self.GetAABB()  # [2, dim] -> {min, max}
-        AABB_len = (AABB[..., 1, :] - AABB[..., 0, :]).abs()  # [dim,]
-        max_len, long_dim = AABB.max(dim=0)
-        aspect = AABB_len / max_len  # [dim,] -> expect to be 0 < aspect <= 1
-        light_probe_shape = (aspect * self.n_row).to(torch.int32).cpu().tolist()
-        H, W = light_probe_shape[1], light_probe_shape[0]
-        light_probe_shape = [1, 1, H, W]
-        light_probe = create_2d_meshgrid_tensor(
-            light_probe_shape, device=self.device, dtype=self.dtype
-        )  # [1, 2, H, W]
-        light_probe = light_probe + 0.5
-        max_HW = max(H, W)
-        light_probe = 2.0 * (light_probe / max_HW) - 1.0
-        light_probe = light_probe.reshape(2, -1).transpose(0, 1)
-        z_mean = self.GetPointCloud(env_index=env_idx)[..., 2:3].mean()
-        light_probe = torch.cat(
-            (light_probe, torch.ones_like(light_probe[:, 0:1]) * z_mean), dim=-1
-        )  # [HW, 3]
+        if not self.is_ablation:
+            self.n_row = 8
+            AABB = self.GetAABB()  # [2, dim] -> {min, max}
+            AABB_len = (AABB[..., 1, :] - AABB[..., 0, :]).abs()  # [dim,]
+            max_len, long_dim = AABB.max(dim=0)
+            aspect = AABB_len / max_len  # [dim,] -> expect to be 0 < aspect <= 1
+            light_probe_shape = (aspect * self.n_row).to(torch.int32).cpu().tolist()
+            H, W = light_probe_shape[1], light_probe_shape[0]
+            light_probe_shape = [1, 1, H, W]
+            light_probe = create_2d_meshgrid_tensor(
+                light_probe_shape, device=self.device, dtype=self.dtype
+            )  # [1, 2, H, W]
+            light_probe = light_probe + 0.5
+            max_HW = max(H, W)
+            light_probe = 2.0 * (light_probe / max_HW) - 1.0
+            light_probe = light_probe.reshape(2, -1).transpose(0, 1)
+            z_mean = self.GetPointCloud(env_index=env_idx)[..., 2:3].mean()
+            light_probe = torch.cat(
+                (light_probe, torch.ones_like(light_probe[:, 0:1]) * z_mean), dim=-1
+            )  # [HW, 3]
 
-        self.light_probe_pos = light_probe
-        self.InfoLog(
-            f"Light Probe position prepared, with shape = {self.light_probe_pos.shape}"
-        )
+            self.light_probe_pos = light_probe
+            self.InfoLog(
+                f"Light Probe position prepared, with shape = {self.light_probe_pos.shape}"
+            )
 
         self.InfoLog("Neural Scene fully prepared.")
 
@@ -325,6 +317,37 @@ class NeuralScene(AbstractScene):
             return self.nodes["test"]
         elif train_type == int(TrainType.VALIDATION):
             return self.nodes["validation"][validation_name]
+        else:
+            self.ErrorLog(
+                f"We only support Train: {int(TrainType.TRAIN)}, "
+                f"Test: {int(TrainType.TEST)}, and Validation: {int(TrainType.VALIDATION)}, "
+                f"while your intput is {train_type}, please take care of your input of scene dataset"
+            )
+
+    def GetInterections(
+        self, train_type: int, validation_name: str = None
+    ) -> torch.Tensor:
+        if train_type == int(TrainType.TRAIN):
+            if len(self.nodes["train"]) <= 3:
+                self.WarnLog(
+                    "You are requiring interactions information from dataset. However, it does not exist. Return None instead"
+                )
+                return None
+            return self.nodes["train"][3]
+        elif train_type == int(TrainType.TEST):
+            if len(self.nodes["test"]) <= 3:
+                self.WarnLog(
+                    "You are requiring interactions information from dataset. However, it does not exist. Return None instead"
+                )
+                return None
+            return self.nodes["test"][3]
+        elif train_type == int(TrainType.VALIDATION):
+            if len(self.nodes["validation"][validation_name]) <= 3:
+                self.WarnLog(
+                    "You are requiring interactions information from dataset. However, it does not exist. Return None instead"
+                )
+                return None
+            return self.nodes["validation"][validation_name][3]
         else:
             self.ErrorLog(
                 f"We only support Train: {int(TrainType.TRAIN)}, "
