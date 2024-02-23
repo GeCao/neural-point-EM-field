@@ -33,7 +33,7 @@ if __name__ == "__main__":
         choices=["sionna_munich", "sionna_etoile", "sionna_wiindoor", "wiindoor"],
         help="Train?",
     )
-    parser.add_argument("--batch_size", type=int, default=1000, help="Size of Batch")
+    parser.add_argument("--batch_size", type=int, default=128, help="Size of Batch")
     parser.add_argument(
         "--num_workers",
         type=int,
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_check_point", type=bool, default=True, help="Save Check Point?"
     )
-    parser.add_argument("--total_steps", type=int, default=3500, help="Total Steps")
+    parser.add_argument("--total_steps", type=int, default=500, help="Total Steps")
 
     parser.add_argument(
         "--dim", type=int, default=3, choices=[3], help="dimension: 2D or 3D"

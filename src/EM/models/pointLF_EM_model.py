@@ -81,9 +81,11 @@ class PointLFEMModel(object):
             for dataset in self.train_dataloader:
                 ray_o, pts_indices, hit_sky, rx_to_pts_and_tx_info, gt_ch = dataset[0:5]
                 interactions = None if len(dataset) <= 5 else dataset[5]
-                valid_index = (
-                    None if interactions is None else interactions[:, :, 0, 0:1] >= 0
-                )
+                valid_index = None
+                if interactions is not None:
+                    valid_index = interactions[:, :, 0, 0:1] >= -1e-5
+                    if valid_index.sum() == 0:
+                        continue
                 # Typically [B, 1,            3        ] - ray_o
                 # Typically [B, n_ray,   K,            ] - pts_indices
                 # Typically [B, n_ray,   K,            ] - hit_sky
@@ -114,9 +116,11 @@ class PointLFEMModel(object):
                 dataset[0:5]
             )
             interactions = None if len(dataset) <= 5 else dataset[5]
-            valid_index = (
-                None if interactions is None else interactions[:, :, 0, 0:1] >= 0
-            )
+            valid_index = None
+            if interactions is not None:
+                valid_index = interactions[:, :, 0, 0:1] >= -1e-5
+                if valid_index.sum() == 0:
+                    continue
             # Typically [B, 1,       3        ] - ray_o
             # Typically [B, n_ray,            ] - probe_indices
             # Typically [B, n_ray+1, (3+1+1+1)] - rx_probetx_info
@@ -180,11 +184,11 @@ class PointLFEMModel(object):
                         0:5
                     ]
                     interactions = None if len(dataset) <= 5 else dataset[5]
-                    valid_index = (
-                        None
-                        if interactions is None
-                        else interactions[:, :, 0, 0:1] >= 0
-                    )
+                    valid_index = None
+                    if interactions is not None:
+                        valid_index = interactions[:, :, 0, 0:1] >= -1e-5
+                        if valid_index.sum() == 0:
+                            continue
                     Batch_size, n_rays, K_closest = pts_indices.shape[0:3]
                     env_idx = 0
                     pts_mask = pts_indices.flatten().cpu().tolist()  # [B*n_rays*K]
@@ -323,9 +327,11 @@ class PointLFEMModel(object):
                     gt_ch,
                 ) = dataset[0:5]
                 interactions = None if len(dataset) <= 5 else dataset[5]
-                valid_index = (
-                    None if interactions is None else interactions[:, :, 0, 0:1] >= 0
-                )
+                valid_index = None
+                if interactions is not None:
+                    valid_index = interactions[:, :, 0, 0:1] >= -1e-5
+                    if valid_index.sum() == 0:
+                        continue
                 Batch_size, n_rays = probe_indices.shape[0:2]
                 env_idx = 0
                 assert len(self.validation_dataloader.dataset.validation_names) == 1

@@ -31,7 +31,7 @@ class PointLightFieldRenderer(nn.Module):
 
     def ParameterInitialization(self):
         module_name = "background"
-        output_ch = 1 if self.scene.gain_only else 3
+        output_ch = 1 if self.scene.gain_only else 6
         if self.scene.is_ablation:
             lightfield = PointLightFieldAblation(
                 k_closest=self.light_field_opt["k_closest"],

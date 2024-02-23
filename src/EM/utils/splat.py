@@ -80,7 +80,6 @@ class Splatter(nn.Module):
                     )
                     for _ in range(self.ndim)
                 ],
-                indexing="ij",
             ),
             dim=-1,
         )

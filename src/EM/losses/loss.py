@@ -36,19 +36,19 @@ class ChannelLoss(nn.Module):
         loss_gain = F.mse_loss(x[..., 0], y[..., 0])
         loss_time = F.mse_loss(x[..., 2], y[..., 2])
         # loss += (1.0 - torch.cos(x[..., 1] - y[..., 1])).mean()
-        # dir_x = x[..., -3:].view(-1, 3)
-        # dir_y = torch.stack(
-        #     (
-        #         torch.cos(y[..., 3]) * torch.sin(y[..., 4]),
-        #         torch.sin(y[..., 3]) * torch.sin(y[..., 4]),
-        #         torch.cos(y[..., 4]),
-        #     ),
-        #     dim=-1,
-        # ).view(-1, 3)
-        # dir_loss_func = nn.CosineSimilarity(dim=1)
-        # loss_angles = (1.0 - dir_loss_func(dir_x, dir_y)).mean()
+        dir_x = x[..., -3:].view(-1, 3)
+        dir_y = torch.stack(
+            (
+                torch.cos(y[..., 3]) * torch.sin(y[..., 4]),
+                torch.sin(y[..., 3]) * torch.sin(y[..., 4]),
+                torch.cos(y[..., 4]),
+            ),
+            dim=-1,
+        ).view(-1, 3)
+        dir_loss_func = nn.CosineSimilarity(dim=1)
+        loss_angles = (1.0 - dir_loss_func(dir_x, dir_y)).mean()
 
-        loss = loss_gain + loss_time  # + loss_angles
+        loss = loss_gain + loss_time + loss_angles
         # print("loss gain, time, angles = ", loss_gain, loss_time, loss_angles)
 
         return loss

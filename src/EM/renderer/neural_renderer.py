@@ -209,7 +209,7 @@ class LightFieldNet(nn.Module):
                 out = torch.cat(
                     (
                         out[..., 0:1],
-                        2.0 * math.pi * torch.sigmoid(out[..., 1:2]) - math.pi,
+                        torch.zeros_like(out[..., 1:2]),
                         out[..., 2:3],
                     ),
                     dim=-1,

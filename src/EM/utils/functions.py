@@ -295,7 +295,7 @@ def RenderRoom(
     grid_min, grid_max = grid.min(), grid.max()
     grid = (grid - grid_min) / (grid_max - grid_min)
     grid = grid.reshape(1, *grid.shape[-2:])
-    color = torch.permute(grid * 255, dims=(1, 2, 0))  # [H, W, 3]
+    color = (grid * 255).permute((1, 2, 0))  # [H, W, 3]
 
     return color
 

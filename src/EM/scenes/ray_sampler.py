@@ -71,13 +71,15 @@ class RaySampler(nn.Module):
         if ch.numel() > FTR:
             gain_only = False
             _, _, _, n_ch, n_rays = ch.shape
+        
+        ch = ch.cpu()
+        rx = rx.cpu()
+        tx = tx.cpu()
+        pts = pts.cpu()
+        light_probe_pos = light_probe_pos.cpu()
 
         if is_ablation:
             # 1. Ray info
-            ch = ch.cpu()
-            rx = rx.cpu()
-            tx = tx.cpu()
-            pts = pts.cpu()
             scene.InfoLog("Data Preparing: ray_o & ray_d")
             ray_o = rx.detach()  # [F, T, R, 3]
             ray_o = ray_o.reshape(FTR, 3).unsqueeze(1)  # [FTR, 1, 3]
@@ -146,10 +148,10 @@ class RaySampler(nn.Module):
             tx_rx_dir = F.normalize(tx_rx_r, dim=-1)  # [FTR, 3]
             tx_rx_dist = tx_rx_r.norm(dim=-1).unsqueeze(-1)  # [FTR, 1]
             tx_rx_elevation = torch.acos(
-                tx_rx_r[..., 2:3] / (tx_rx_dist + eps)
+                torch.clamp(tx_rx_r[..., 2:3] / (tx_rx_dist + eps), -1, 1)
             )  # [FTR, 1]
             tx_rx_azimuth = torch.acos(
-                tx_rx_r[..., 0:1] / (tx_rx_dist * torch.sin(tx_rx_elevation) + eps)
+                torch.clamp(tx_rx_r[..., 0:1] / (tx_rx_dist * torch.sin(tx_rx_elevation) + eps), -1, 1)
             )  # [FTR, 1] -> clamp(0, PI)
             tx_rx_azimuth = torch.where(
                 tx_rx_r[..., 1:2] < 0.0, 2.0 * math.pi - tx_rx_azimuth, tx_rx_azimuth
@@ -163,11 +165,11 @@ class RaySampler(nn.Module):
             scene.InfoLog("Data Preparing: rx - pts information")
             nearest_pts_distance = nearest_pts_distance.unsqueeze(-1)
             nearest_pts_elevation = torch.acos(
-                nearest_pts_r[..., 2:3] / (nearest_pts_distance + eps)
+                torch.clamp(nearest_pts_r[..., 2:3] / (nearest_pts_distance + eps), -1, 1)
             )
             nearest_pts_azimuth = torch.acos(
-                nearest_pts_r[..., 0:1]
-                / (nearest_pts_distance * torch.sin(nearest_pts_elevation) + eps)
+                torch.clamp(nearest_pts_r[..., 0:1]
+                / (nearest_pts_distance * torch.sin(nearest_pts_elevation) + eps), -1, 1)
             )  # [0, PI]
             nearest_pts_azimuth = torch.where(
                 nearest_pts_r[..., 1:2] < 0.0,
@@ -283,18 +285,13 @@ class RaySampler(nn.Module):
         tx_rx_r = (tx.unsqueeze(2) - rx).reshape(FTR, 3)  # [FTR, 3]
         tx_rx_dir = F.normalize(tx_rx_r, dim=-1)  # [FTR, 3]
         tx_rx_dist = tx_rx_r.norm(dim=-1).unsqueeze(-1)  # [FTR, 1]
-        tx_rx_elevation = torch.acos(tx_rx_r[..., 2:3] / (tx_rx_dist + eps))  # [FTR, 1]
+        tx_rx_elevation = torch.acos(torch.clamp(tx_rx_r[..., 2:3] / (tx_rx_dist + eps), -1, 1))  # [FTR, 1]
         tx_rx_azimuth = torch.acos(
-            tx_rx_r[..., 0:1] / (tx_rx_dist * torch.sin(tx_rx_elevation) + eps)
+            torch.clamp(tx_rx_r[..., 0:1] / (tx_rx_dist * torch.sin(tx_rx_elevation) + eps), -1, 1)
         )  # [FTR, 1] -> clamp(0, PI)
         tx_rx_azimuth = torch.where(
             tx_rx_r[..., 1:2] < 0.0, 2.0 * math.pi - tx_rx_azimuth, tx_rx_azimuth
         )  # [FTR, 1] -> clamp(0, 2PI)
-        # # TODO: Check this log10
-        # tx_rx_dist = torch.where(
-        #     tx_rx_dist < 0.001, 1000 * torch.ones_like(tx_rx_dist), 1.0 / tx_rx_dist
-        # )
-        # tx_rx_dist = 10.0 * torch.log10(tx_rx_dist)
         self.nodes[env_idx][train_type]["tx_rx_dir"] = tx_rx_dir.cpu()
         self.nodes[env_idx][train_type]["tx_rx_distance"] = tx_rx_dist.cpu()
         self.nodes[env_idx][train_type]["tx_rx_elevation"] = tx_rx_elevation.cpu()
@@ -304,11 +301,11 @@ class RaySampler(nn.Module):
         scene.InfoLog("Data Preparing: rx - Light probe information")
         nearest_probe_distance = nearest_probe_distance.unsqueeze(-1)
         nearest_probe_elevation = torch.acos(
-            nearest_light_probe_r[..., 2:3] / (nearest_probe_distance + eps)
+            torch.clamp(nearest_light_probe_r[..., 2:3] / (nearest_probe_distance + eps), -1, 1)
         )
         nearest_probe_azimuth = torch.acos(
-            nearest_light_probe_r[..., 0:1]
-            / (nearest_probe_distance * torch.sin(nearest_probe_elevation) + eps)
+            torch.clamp(nearest_light_probe_r[..., 0:1]
+            / (nearest_probe_distance * torch.sin(nearest_probe_elevation) + eps), -1, 1)
         )  # [0, PI]
         nearest_probe_azimuth = torch.where(
             nearest_light_probe_r[..., 1:2] < 0.0,
@@ -347,14 +344,14 @@ class RaySampler(nn.Module):
             nearest_probe_pts_r, dim=-1
         )  # [n_probe, K_closest, 3]
         nearest_probe_pts_elevation = torch.acos(
-            nearest_probe_pts_r[..., 2:3] / (nearest_probe_pts_distance + eps)
+            torch.clamp(nearest_probe_pts_r[..., 2:3] / (nearest_probe_pts_distance + eps), -1, 1)
         )  # [n_probe, K_closest, 1]
         nearest_probe_pts_azimuth = torch.acos(
-            nearest_probe_pts_r[..., 0:1]
+            torch.clamp(nearest_probe_pts_r[..., 0:1]
             / (
                 nearest_probe_pts_distance * torch.sin(nearest_probe_pts_elevation)
                 + eps
-            )
+            ), -1, 1)
         )  # [n_probe, K_closest, 1] -> clamp(0, PI)
         nearest_probe_pts_azimuth = torch.where(
             nearest_probe_pts_r[..., 1:2] < 0.0,
@@ -385,15 +382,15 @@ class RaySampler(nn.Module):
         light_probe_tx_distance = light_probe_tx_r.norm(dim=-1)  # [n_probes, T,]
         light_probe_tx_distance = light_probe_tx_distance.unsqueeze(-1)
         light_probe_tx_elevation = torch.acos(
-            light_probe_tx_r[..., 2:3] / (light_probe_tx_distance + eps)
+            torch.clamp(light_probe_tx_r[..., 2:3] / (light_probe_tx_distance + eps), -1, 1)
         )  # [n_probe, T, 1]
         light_probe_tx_azimuth = torch.acos(
-            light_probe_tx_r[..., 0:1]
-            / (light_probe_tx_distance * torch.sin(light_probe_tx_elevation) + eps)
+            torch.clamp(light_probe_tx_r[..., 0:1]
+            / (light_probe_tx_distance * torch.sin(light_probe_tx_elevation) + eps), -1, 1)
         )  # [n_probe, T, 1] -> clamp(0, PI)
         light_probe_tx_azimuth = torch.acos(
-            light_probe_tx_r[..., 0:1]
-            / (light_probe_tx_distance * torch.sin(light_probe_tx_elevation) + eps)
+            torch.clamp(light_probe_tx_r[..., 0:1]
+            / (light_probe_tx_distance * torch.sin(light_probe_tx_elevation) + eps), -1, 1)
         )  # [n_probe, T, 1] -> clamp(0, PI)
         self.nodes[env_idx][train_type]["light_probe_tx_dir"] = light_probe_tx_dir.cpu()
         self.nodes[env_idx][train_type][
