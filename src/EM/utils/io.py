@@ -100,8 +100,10 @@ def LoadMeshes(
     else:
         tex = Textures(verts_rgb=verts_rgba)
 
-    vertices = torch.cat(vertices, dim=-2).reshape(1, -1, 3)
-    faces = torch.cat(faces, dim=-2).to(torch.int64).reshape(1, -1, 3)
+    if type(vertices) == type([]):
+        vertices = torch.cat(vertices, dim=-2).reshape(1, -1, 3)
+        faces = torch.cat(faces, dim=-2).to(torch.int64).reshape(1, -1, 3)
+
     vertices_min = vertices.reshape(-1, 3).min(dim=0)[0].reshape(3)
     vertices_max = vertices.reshape(-1, 3).max(dim=0)[0].reshape(3)
     vertices_len, scale_dim = (vertices_max - vertices_min).max(dim=0)

@@ -311,7 +311,7 @@ class PointLFEMModel(object):
                     rx_pos = torch.cat((rx_pos, ray_o[:, 0, 0:3]), dim=0)
                     # TODO: tx-idx = 3 only
                     tx_pos = self.scene.GetTransmitter(
-                        transmitter_idx=3,
+                        transmitter_idx=0,
                         train_type=int(TrainType.VALIDATION),
                         validation_name=self.scene.validation_target[0],
                     ).GetSourceLocation()
@@ -488,12 +488,14 @@ class PointLFEMModel(object):
                     # elevation
                     # predicted_ch = torch.cos(predicted_ch[:, :, 4:5]).mean(dim=1)
                     # gt_ch = torch.cos(gt_ch[:, :, 4:5]).mean(dim=1)
-                predicted_gains = torch.cat((predicted_gains, predicted_ch), dim=0)
-                gt_gains = torch.cat((gt_gains, gt_ch), dim=0)
+                predicted_gains = torch.cat(
+                    (predicted_gains[..., 0:1], predicted_ch[..., 0:1]), dim=0
+                )
+                gt_gains = torch.cat((gt_gains[..., 0:1], gt_ch[..., 0:1]), dim=0)
                 rx_pos = torch.cat((rx_pos, ray_o[:, 0, 0:3]), dim=0)
                 # TODO: tx-idx = 3 only
                 tx_pos = self.scene.GetTransmitter(
-                    transmitter_idx=3,
+                    transmitter_idx=0,
                     train_type=int(TrainType.VALIDATION),
                     validation_name=self.scene.validation_target[0],
                 ).GetSourceLocation()

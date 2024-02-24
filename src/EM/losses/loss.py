@@ -25,6 +25,12 @@ class ChannelLoss(nn.Module):
 
             return loss
 
+        if x.shape[-1] == 4 and y.shape[-1] == 4:
+            valid = y.abs() > 0.01
+            loss = self.mse_loss(x[valid], y[valid])
+
+            return loss
+
         if len(x.shape) == 3 and len(y.shape) == 3:
             assert x.shape[-1] == 6
             assert y.shape[-1] == 5

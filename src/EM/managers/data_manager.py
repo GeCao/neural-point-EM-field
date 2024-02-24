@@ -69,7 +69,7 @@ class SceneDataSet(Dataset):
                     rx_idx = (index % (num_tx * num_rx)) % num_rx
 
                     if self.train_type == int(TrainType.VALIDATION):
-                        tx_idx = 3  # TODO: tx_idx=3 only
+                        tx_idx = 0  # TODO: tx_idx=3 only
 
                     return self.scene.RaySample(
                         env_idx=env_idx,
@@ -224,13 +224,14 @@ class DataManager(object):
                     # print("rxtx_dir_d = ", rxtx_dir_d)
                     # exit(0)
                 elif "gain" in data:
-                    ch = np.array(data["gain"])  # [T, H, W, 1]
+                    ch = np.array(data["gain"])  # [T, H, W, 4]
                     rx = np.array(data["rx"])  # [T, H, W, dim=3]
                     tx = np.array(data["tx"])  # [T, dim=3]
                     T, H, W, _ = rx.shape
-                    ch = ch.reshape(1, T, H * W, 1)  # [F, T, H*W, 1]
-                    rx = rx.reshape(1, T, H * W, 3)  # [F, T, H*W, dim=3]
-                    tx = np.expand_dims(tx, axis=0)  # [F, T, dim=3]
+                    T = T // 4
+                    ch = ch.reshape(1, T, H * W, 4)  # [F, T, H*W, 1]
+                    rx = rx[0:T, ...].reshape(1, T, H * W, 3)  # [F, T, H*W, dim=3]
+                    tx = np.expand_dims(tx[0:T, ...], axis=0)  # [F, T, dim=3]
                     result["H"] = H
                     result["W"] = W
                     print("Read channel: mean = ", ch.mean())

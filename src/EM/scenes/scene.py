@@ -179,7 +179,7 @@ class NeuralScene(AbstractScene):
                 0:3
             ]  # F, T, R
             self.gain_only = (
-                True if data["validation"][target_name][0].shape[-1] == 1 else False
+                True if data["validation"][target_name][0].shape[-1] == 4 else False
             )
 
             self.log_manager.InfoLog(
@@ -284,7 +284,7 @@ class NeuralScene(AbstractScene):
             self.n_row = 8
             AABB = self.GetAABB()  # [2, dim] -> {min, max}
             AABB_len = (AABB[..., 1, :] - AABB[..., 0, :]).abs()  # [dim,]
-            max_len, long_dim = AABB.max(dim=0)
+            max_len, long_dim = AABB_len.max(dim=0)
             aspect = AABB_len / max_len  # [dim,] -> expect to be 0 < aspect <= 1
             light_probe_shape = (aspect * self.n_row).to(torch.int32).cpu().tolist()
             H, W = light_probe_shape[1], light_probe_shape[0]

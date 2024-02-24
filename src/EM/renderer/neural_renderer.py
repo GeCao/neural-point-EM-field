@@ -172,10 +172,13 @@ class LightFieldNet(nn.Module):
         #     n_rays: SH_coeff * SH_basis (sample from light probe)
         #     1:      Sum pooling         (sample from LOS)
 
-        if self.output_ch == 1:
-            out = (out[:, :-1, :, :] * SH_basis).sum(dim=-1)  # [B, n_rays, ch]
+        if self.output_ch == 1 or self.output_ch == 4:
             # Only take gain as output
-            out = out.sum(dim=1) + out[:, -1, :, :].sum(dim=-1)  # [B, ch]
+            out = (out[:, :-1, :, :] * SH_basis).sum(dim=-1).sum(dim=1) + out[
+                :, -1, :, :
+            ].sum(
+                dim=-1
+            )  # [B, ch]
             out = out.view(n_batch, self.output_ch)
         else:
             # Take all the channel

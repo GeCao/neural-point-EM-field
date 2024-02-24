@@ -29,7 +29,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set",
         type=str,
-        default="wiindoor",
+        default="sionna_munich",
         choices=["sionna_munich", "sionna_etoile", "sionna_wiindoor", "wiindoor"],
         help="Train?",
     )
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_check_point", type=bool, default=True, help="Save Check Point?"
     )
-    parser.add_argument("--total_steps", type=int, default=500, help="Total Steps")
+    parser.add_argument("--total_steps", type=int, default=300, help="Total Steps")
 
     parser.add_argument(
         "--dim", type=int, default=3, choices=[3], help="dimension: 2D or 3D"
