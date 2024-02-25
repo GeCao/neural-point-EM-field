@@ -20,14 +20,12 @@ class ChannelLoss(nn.Module):
         bool_index = [8]  # TODO: Take this as punishment loss design
 
         if x.shape[-1] == 1 and y.shape[-1] == 1:
-            valid = y.abs() > 0.01
-            loss = self.mse_loss(x[valid], y[valid])
+            loss = self.mse_loss(x[valid_index], y[valid_index])
 
             return loss
 
         if x.shape[-1] == 4 and y.shape[-1] == 4:
-            valid = y.abs() > 0.01
-            loss = self.mse_loss(x[valid], y[valid])
+            loss = self.mse_loss(x[valid_index], y[valid_index])
 
             return loss
 

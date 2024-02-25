@@ -75,7 +75,8 @@ class RaySampler(nn.Module):
         rx = rx.cpu()
         tx = tx.cpu()
         pts = pts.cpu()
-        light_probe_pos = light_probe_pos.cpu()
+        if not is_ablation:
+            light_probe_pos = light_probe_pos.cpu()
 
         if is_ablation:
             # 1. Ray info

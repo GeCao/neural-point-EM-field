@@ -69,7 +69,7 @@ class SceneDataSet(Dataset):
                     rx_idx = (index % (num_tx * num_rx)) % num_rx
 
                     if self.train_type == int(TrainType.VALIDATION):
-                        tx_idx = 0  # TODO: tx_idx=3 only
+                        tx_idx = 5  # TODO: tx_idx=3 only
 
                     return self.scene.RaySample(
                         env_idx=env_idx,
@@ -139,7 +139,7 @@ class DataManager(object):
         if "sionna" in str(data_path):
             # Different data management
             data_files = os.listdir(data_path)
-            target_list = ["041"]
+            target_list = ["023"]
         else:
             target_list = ["checkerboard", "genz", "gendiag"]
             if validation_target == "all":
@@ -295,7 +295,7 @@ class DataManager(object):
                     result["train"][2][:, idx : idx + 1, ...],
                 ]
 
-            vali_idx.append(23)
+            vali_idx.append(41)
             vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]
             print(f"Load validation name {vali_idx} from train dataset")
             for i in range(len(vali_idx)):

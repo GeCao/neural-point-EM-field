@@ -29,7 +29,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set",
         type=str,
-        default="sionna_munich",
+        default="sionna_wiindoor",
         choices=["sionna_munich", "sionna_etoile", "sionna_wiindoor", "wiindoor"],
         help="Train?",
     )

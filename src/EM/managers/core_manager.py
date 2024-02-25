@@ -224,6 +224,7 @@ class CoreManager(AbstractManager):
             attributes=torch.ones_like(pts[env_idx, :, 0:1]),
             res_x=rendered_room.shape[1],
             res_y=rendered_room.shape[0],
+            support_radius=3,
         )
         rendered_room = (rendered_room - rendered_room.min()) / (
             rendered_room.max() - rendered_room.min()

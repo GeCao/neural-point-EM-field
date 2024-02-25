@@ -237,31 +237,27 @@ def DumpGrayFigureToRGB(
 
         zero_mask = (gt_color == 0.0).reshape(H, W, 1).repeat(1, 1, 4).cpu().numpy()
         zero_mask = np.flip(zero_mask, axis=0)
-    pred_color = (pred_color - pred_color.min()) / (gt_color.max() - gt_color.min())
+    pred_color = (pred_color - gt_color.min()) / (gt_color.max() - gt_color.min())
     gt_color = (gt_color - gt_color.min()) / (gt_color.max() - gt_color.min())
 
-    print("pred = ", gt_color.min(), gt_color.max(), gt_color.mean())
+    print("pred = ", pred_color.min(), pred_color.max(), pred_color.mean())
     print("gt = ", gt_color.min(), gt_color.max(), gt_color.mean())
 
     save_dir = os.path.dirname(save_path)
-    cm = plt.get_cmap("rainbow")
+    cm = plt.get_cmap("Greens")
     pred_image = np.flip(pred_color.reshape(H, W).cpu().numpy(), axis=0)
-    # if pred_image.max() > 1 + eps:
-    #     pred_image = pred_image / gt_color.max().item()
     pred_image = cm(pred_image) * 255.0
     pred_image[inf_mask] = np.inf
     pred_image[zero_mask] = np.inf
     Image.fromarray((pred_image).astype(np.uint8)).save(
-        os.path.join(save_dir, "pred_gain.png")
+        os.path.join(save_dir, "pred_time.png")
     )
     gt_image = np.flip(gt_color.reshape(H, W).cpu().numpy(), axis=0)
-    # if gt_image.max() > 1 + eps:
-    #     gt_image = gt_image / gt_color.max().item()
     gt_image = cm(gt_image) * 255.0
     gt_image[inf_mask] = np.inf
     gt_image[zero_mask] = np.inf
     Image.fromarray((gt_image).astype(np.uint8)).save(
-        os.path.join(save_dir, "gt_gain.png")
+        os.path.join(save_dir, "gt_time.png")
     )
 
 
