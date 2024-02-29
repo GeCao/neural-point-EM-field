@@ -305,7 +305,7 @@ def SplatFromParticlesToGrid(
     attributes: torch.Tensor,
     res_x: int,
     res_y: int,
-    support_radius: int = 8,
+    support_radius: int = 6,
 ) -> torch.Tensor:
     dtype = particles.dtype
     device = particles.device
@@ -323,6 +323,55 @@ def SplatFromParticlesToGrid(
     particles = particles.reshape(batch_size, -1, particles.shape[-1])
     attributes = attributes.reshape(batch_size, -1, attributes.shape[-1])
     assert particles.shape[-2] == attributes.shape[-2] or attributes.shape[-2] == 1
+
+    # debug
+    grid = torch.zeros(
+        (batch_size, res_y, res_x, attributes.shape[-1]), dtype=particles.dtype
+    ).to(particles.device)
+    AABB_min, _ = particles.min(dim=-2, keepdim=True)  # [B, 1, dim]
+    AABB_max, _ = particles.max(dim=-2, keepdim=True)  # [B, 1, dim]
+    canvas_pos = (particles - AABB_min) / (AABB_max - AABB_min)[..., 0:2]  # ~(0, 1)
+    canvas_x = (
+        (canvas_pos[..., 0] * (res_x - 1))
+        .reshape(batch_size, -1, 1)
+        .repeat(1, 1, attributes.shape[-1])
+    )  # [B, n_pts, C]
+    canvas_y = (
+        (canvas_pos[..., 1] * (res_y - 1))
+        .reshape(batch_size, -1, 1)
+        .repeat(1, 1, attributes.shape[-1])
+    )  # [B, n_pts, C]
+    steps = [
+        [j // support_radius, j % support_radius]
+        for j in range(support_radius * support_radius)
+    ]
+    for batch_idx in range(batch_size):
+        for i in range(canvas_x.shape[-2]):
+            for step in steps:
+                grid[
+                    batch_idx,
+                    (canvas_y[batch_idx, i, 0] + step[1])
+                    .to(torch.int32)
+                    .clamp(0, res_y - 1),
+                    (canvas_x[batch_idx, i, 0] + step[0])
+                    .to(torch.int32)
+                    .clamp(0, res_x - 1),
+                    :,
+                ] = torch.max(
+                    grid[
+                        batch_idx,
+                        (canvas_y[batch_idx, i, 0] + step[1])
+                        .to(torch.int32)
+                        .clamp(0, res_y - 1),
+                        (canvas_x[batch_idx, i, 0] + step[0])
+                        .to(torch.int32)
+                        .clamp(0, res_x - 1),
+                        :,
+                    ],
+                    attributes[batch_idx, i, :],
+                )
+    grid = grid.permute((0, 3, 1, 2))  # [B, C, H, W]
+    return grid
 
     # From particle to grid
     AABB_min, _ = particles.min(dim=-2, keepdim=True)  # [B, 1, dim]

@@ -69,7 +69,7 @@ class SceneDataSet(Dataset):
                     rx_idx = (index % (num_tx * num_rx)) % num_rx
 
                     if self.train_type == int(TrainType.VALIDATION):
-                        tx_idx = 5  # TODO: tx_idx=3 only
+                        tx_idx = 0  # TODO: tx_idx=3 only
 
                     return self.scene.RaySample(
                         env_idx=env_idx,
@@ -139,7 +139,7 @@ class DataManager(object):
         if "sionna" in str(data_path):
             # Different data management
             data_files = os.listdir(data_path)
-            target_list = ["023"]
+            target_list = ["030"]
         else:
             target_list = ["checkerboard", "genz", "gendiag"]
             if validation_target == "all":
@@ -227,8 +227,9 @@ class DataManager(object):
                     ch = np.array(data["gain"])  # [T, H, W, 4]
                     rx = np.array(data["rx"])  # [T, H, W, dim=3]
                     tx = np.array(data["tx"])  # [T, dim=3]
-                    T, H, W, _ = rx.shape
-                    T = T // 4
+                    T, H, W, n_ch = rx.shape
+                    if n_ch != 4:
+                        raise RuntimeError("Regenerate your dataset!")
                     ch = ch.reshape(1, T, H * W, 4)  # [F, T, H*W, 1]
                     rx = rx[0:T, ...].reshape(1, T, H * W, 3)  # [F, T, H*W, dim=3]
                     tx = np.expand_dims(tx[0:T, ...], axis=0)  # [F, T, dim=3]
@@ -242,6 +243,13 @@ class DataManager(object):
                 tx = torch.from_numpy(tx).to(dtype).to(device)
                 if interactions is not None:
                     interactions = torch.from_numpy(interactions).to(dtype).to(device)
+                    interactions[
+                        interactions[..., 0:1]
+                        .to(torch.int32)
+                        .sum(dim=-2, keepdim=True)
+                        .repeat(1, 1, 1, 1, interactions.shape[-2], 4)
+                        == 0
+                    ] = -1
 
                 if target_name is "train":
                     if result["train"] is None:
@@ -295,7 +303,7 @@ class DataManager(object):
                     result["train"][2][:, idx : idx + 1, ...],
                 ]
 
-            vali_idx.append(41)
+            vali_idx = vali_idx + [31, 32, 42, 43, 44]
             vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]
             print(f"Load validation name {vali_idx} from train dataset")
             for i in range(len(vali_idx)):

@@ -29,8 +29,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set",
         type=str,
-        default="sionna_wiindoor",
-        choices=["sionna_munich", "sionna_etoile", "sionna_wiindoor", "wiindoor"],
+        default="sionna_etoicenter",
+        choices=[
+            "sionna_munich",
+            "sionna_etoile",
+            "sionna_etoicenter",
+            "sionna_wiindoor",
+            "wiindoor",
+            "wi3rooms_0",
+        ],
         help="Train?",
     )
     parser.add_argument("--batch_size", type=int, default=128, help="Size of Batch")

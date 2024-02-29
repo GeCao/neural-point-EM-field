@@ -312,12 +312,14 @@ class PointLFEMModel(object):
                         # predicted_ch = torch.cos(predicted_ch[:, :, 4:5]).mean(dim=1)
                         # gt_ch = torch.cos(gt_ch[:, :, 4:5]).mean(dim=1)
 
-                    predicted_gains = torch.cat((predicted_gains, predicted_ch), dim=0)
-                    gt_gains = torch.cat((gt_gains, gt_ch), dim=0)
+                    predicted_gains = torch.cat(
+                        (predicted_gains[..., 0:1], predicted_ch[..., 0:1]), dim=0
+                    )
+                    gt_gains = torch.cat((gt_gains[..., 0:1], gt_ch[..., 0:1]), dim=0)
                     rx_pos = torch.cat((rx_pos, ray_o[:, 0, 0:3]), dim=0)
                     # TODO: tx-idx = 3 only
                     tx_pos = self.scene.GetTransmitter(
-                        transmitter_idx=5,
+                        transmitter_idx=0,
                         train_type=int(TrainType.VALIDATION),
                         validation_name=self.scene.validation_target[0],
                     ).GetSourceLocation()
@@ -399,7 +401,11 @@ class PointLFEMModel(object):
                     #     interactions[:, :, 0:1, 0].abs()
                     #     + interactions[:, :, 1:2, 0].abs()
                     #     == 0
-                    # )
+                    # ).to(torch.int32) + (interactions[:, :, 0:1, 0] == 0) * (
+                    #     interactions[:, :, 2:3, 0] == 0
+                    # ) * (
+                    #     (interactions[:, :, 1:2, 0] - 1).abs() == 1
+                    # ) > 0
                     # predicted_ch = predicted_ch[:, :, 0:1]
                     # gt_ch = gt_ch[:, :, 0:1]
                     # predicted_ch[~is_LOS] = 0.0
@@ -407,8 +413,12 @@ class PointLFEMModel(object):
                     # predicted_ch = predicted_ch.sum(dim=1)
                     # gt_ch = gt_ch.sum(dim=1)
 
-                    # predicted_ch = predicted_ch[..., 0:1].max(dim=1)[0]
-                    # gt_ch = gt_ch[..., 0:1].max(dim=1)[0]
+                    # pred_mask = predicted_ch[..., 0:1].abs() < 1e-5
+                    # predicted_ch[..., 0:1][pred_mask] = -10000
+                    # predicted_ch = predicted_ch[..., 0:1].max(dim=-2)[0]
+                    # gt_mask = gt_ch[..., 0:1].abs() < 1e-5
+                    # gt_ch[..., 0:1][gt_mask] = -10000
+                    # gt_ch = gt_ch[..., 0:1].max(dim=-2)[0]
 
                     # Gain
                     # Avoid double counting
@@ -433,10 +443,10 @@ class PointLFEMModel(object):
                     #     )
 
                     # freq = 3.5
-                    # w = 2.0 * np.pi * freq
-                    # directivity = torch.pow(10.0, predicted_ch[:, :, 0:1] / 20.0)
+                    # k = 2.0 * np.pi * freq / 0.3
+                    # directivity = torch.pow(10.0, predicted_ch[:, :, 0:1] / 10.0)
                     # directivity[predicted_ch[:, :, 0:1].abs() < 1e-5] = 0.0
-                    # phase = gt_ch[:, :, 1:2] + w * gt_ch[:, :, 2:3]
+                    # phase = gt_ch[:, :, 1:2] + k * 0.3 * gt_ch[:, :, 2:3]
                     # U = 1.0 * directivity / (4.0 * np.pi)
                     # E = U * torch.cos(phase)
                     # gt_dir = torch.stack(
@@ -454,9 +464,9 @@ class PointLFEMModel(object):
                     # directivity = 4.0 * np.pi * U / 1.0
                     # predicted_ch = 10.0 * torch.log10(directivity)
 
-                    # directivity = torch.pow(10.0, gt_ch[:, :, 0:1] / 20.0)
+                    # directivity = torch.pow(10.0, gt_ch[:, :, 0:1] / 10.0)
                     # directivity[gt_ch[:, :, 0:1].abs() < 1e-5] = 0.0
-                    # phase = gt_ch[:, :, 1:2] + w * 0.3 * gt_ch[:, :, 2:3]
+                    # phase = gt_ch[:, :, 1:2] + k * 0.3 * gt_ch[:, :, 2:3]
                     # U = 1.0 * directivity / (4.0 * np.pi)
                     # E = U * torch.cos(phase)
                     # gt_dir = torch.stack(
@@ -507,7 +517,7 @@ class PointLFEMModel(object):
                 rx_pos = torch.cat((rx_pos, ray_o[:, 0, 0:3]), dim=0)
                 # TODO: tx-idx = 3 only
                 tx_pos = self.scene.GetTransmitter(
-                    transmitter_idx=5,
+                    transmitter_idx=0,
                     train_type=int(TrainType.VALIDATION),
                     validation_name=self.scene.validation_target[0],
                 ).GetSourceLocation()

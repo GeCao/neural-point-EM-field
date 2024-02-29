@@ -109,7 +109,7 @@ class LightFieldNetAblation(nn.Module):
         # )
 
         out = out.view(n_batch, n_rays, self.output_ch)
-        if self.output_ch == 1:
+        if self.output_ch == 1 or self.output_ch == 4:
             out = out.sum(dim=-2)
         else:
             out[..., -3:] = F.normalize(out[..., -3:], dim=-1)

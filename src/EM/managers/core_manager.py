@@ -206,7 +206,12 @@ class CoreManager(AbstractManager):
         pts = LoadPointCloudFromMesh(
             meshes=meshes, num_pts_samples=5000
         )  # [F, n_pts, 3]
-        rendered_room = RenderRoom(pts[env_idx], res_x=256)
+        rendered_room = RenderRoom(pts[env_idx], res_x=128)
+        reverted = False
+        if gt_gains.max() < 1e-6:
+            predicted_gains = -predicted_gains
+            gt_gains = -gt_gains
+            reverted = True
         pred_color = SplatFromParticlesToGrid(
             particles=rx_pos[..., 0:2],
             attributes=predicted_gains,
@@ -219,6 +224,9 @@ class CoreManager(AbstractManager):
             res_x=rendered_room.shape[1],
             res_y=rendered_room.shape[0],
         )
+        if reverted:
+            pred_color = -pred_color
+            gt_color = -gt_color
         rendered_room = SplatFromParticlesToGrid(
             particles=pts[env_idx, :, 0:2],
             attributes=torch.ones_like(pts[env_idx, :, 0:1]),

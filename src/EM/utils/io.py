@@ -5,6 +5,7 @@ import torch
 import pywavefront
 import matplotlib.pyplot as plt
 import open3d as o3d
+import cv2
 from PIL import Image
 from typing import List
 from plyfile import PlyData, PlyElement
@@ -31,6 +32,7 @@ def LoadMeshes(
         'visible'------{NumOfFaces->bool}
     are given.
     """
+    is_sionna = "sionna" in data_path
     obj_path = os.path.join(data_path, "objs")
     if not os.path.exists(obj_path):
         raise RuntimeError(
@@ -46,26 +48,37 @@ def LoadMeshes(
     verts_rgba = []
     materials = {}
     visible = {}
-    json_found = False
-    for filename in data_files:
-        if filename[-5:] == ".json":
-            json_found = True
-            json_path = os.path.join(obj_path, filename)
-            with open(json_path, "r") as load_f:
-                json_data = json.load(load_f)
-                new_v = torch.Tensor(json_data["verts"]).to(device).to(dtype)
-                new_f = torch.Tensor(json_data["faces"]).to(device).to(torch.int32)
-                new_e = torch.Tensor(json_data["edges"]).to(device).to(dtype)
-                new_vcolor = torch.Tensor(json_data["verts_rgba"]).to(device).to(dtype)
+    if not is_sionna:
+        for filename in data_files:
+            if filename[-5:] == ".json" and "1" in filename:
+                json_path = os.path.join(obj_path, filename)
+                with open(json_path, "r") as load_f:
+                    json_data = json.load(load_f)
+                    new_v = torch.Tensor(json_data["verts"]).to(device).to(dtype)
+                    new_f = torch.Tensor(json_data["faces"]).to(device).to(torch.int32)
+                    new_e = torch.Tensor(json_data["edges"]).to(device).to(dtype)
+                    new_vcolor = (
+                        torch.Tensor(json_data["verts_rgba"]).to(device).to(dtype)
+                    )
+                    vertices.append(new_v)
+                    faces.append(new_f)
+                    edges.append(new_e)
+                    verts_rgba.append(new_vcolor.reshape(-1, 4))
+
+                load_f.close()
+                break
+            elif filename[-4:] == ".obj" and "1" in filename:
+                json_path = os.path.join(obj_path, filename)
+                scene = pywavefront.Wavefront(json_path, collect_faces=True)
+
+                new_v = torch.Tensor(scene.vertices).to(device).to(dtype)
+                new_f = (
+                    torch.Tensor(scene.meshes[None].faces).to(device).to(torch.int32)
+                )
                 vertices.append(new_v)
                 faces.append(new_f)
-                edges.append(new_e)
-                verts_rgba.append(new_vcolor.reshape(-1, 4))
-
-            load_f.close()
-            break
-
-    if not json_found:
+                break
+    else:
         for filename in data_files:
             if filename[-4:] == ".obj":
                 json_path = os.path.join(obj_path, filename)
@@ -96,13 +109,12 @@ def LoadMeshes(
                     vert_offset = vertices.shape[0]
                     vertices = torch.cat((vertices, new_v), dim=-2)
                     faces = torch.cat((faces, new_f + vert_offset), dim=-2)
-        tex = None
-    else:
-        tex = Textures(verts_rgb=verts_rgba)
 
     if type(vertices) == type([]):
         vertices = torch.cat(vertices, dim=-2).reshape(1, -1, 3)
         faces = torch.cat(faces, dim=-2).to(torch.int64).reshape(1, -1, 3)
+
+    print(vertices.shape, faces.shape)
 
     vertices_min = vertices.reshape(-1, 3).min(dim=0)[0].reshape(3)
     vertices_max = vertices.reshape(-1, 3).max(dim=0)[0].reshape(3)
@@ -110,7 +122,7 @@ def LoadMeshes(
     AABB_before_scale = torch.stack((vertices_min, vertices_max), dim=0)  # [2, dim]
 
     vertices = 2.0 * (vertices - vertices_min[scale_dim]) / vertices_len - 1.0
-    meshes = Meshes(verts=vertices, faces=faces, textures=tex)
+    meshes = Meshes(verts=vertices, faces=faces, textures=None)
 
     vertices_min = vertices.reshape(-1, 3).min(dim=0)[0].reshape(1, 3)
     vertices_max = vertices.reshape(-1, 3).max(dim=0)[0].reshape(1, 3)
@@ -125,7 +137,7 @@ def LoadPointCloudFromMesh(meshes: Meshes, num_pts_samples: int) -> torch.Tensor
     )  # [F, NumOfSamples, 3]
 
     # DumpCFGFile(
-    #     save_path="/home/gecao2/homework/ACEM/neural-point-EM-field/demo/demo.cfg",
+    #     save_path="/home/gecao2/homework/ACEM/neural-point-EM-field/demo/pointcloud.cfg",
     #     point_clouds=point_clouds,
     # )
     return point_clouds
@@ -159,9 +171,13 @@ def DumpCFGFile(save_path: str, point_clouds: torch.Tensor):
         fp.write(f"entry_count = {3}\n")
 
         mass = 1.0
+        floor_height = point_clouds[:, 2].min()
         for i in range(point_clouds.shape[0]):
+            particle_type = "H"
+            if point_clouds[i, 2] <= floor_height + 0.01:
+                particle_type = "F"
             fp.write(
-                f"{mass}\n{'H'}\n{point_clouds[i, 0].item()} {point_clouds[i, 1].item()} {point_clouds[i, 2].item()}\n"
+                f"{mass}\n{particle_type}\n{point_clouds[i, 0].item()} {point_clouds[i, 1].item()} {point_clouds[i, 2].item()}\n"
             )
 
     fp.close()
@@ -230,35 +246,117 @@ def DumpGrayFigureToRGB(
     plt.savefig(save_path)
     plt.close()
 
-    # Normalization
-    if mask is not None:
-        inf_mask = torch.stack([mask, mask, mask, mask], axis=-1).cpu().numpy()
-        inf_mask = np.flip(inf_mask, axis=0)
-
-        zero_mask = (gt_color == 0.0).reshape(H, W, 1).repeat(1, 1, 4).cpu().numpy()
-        zero_mask = np.flip(zero_mask, axis=0)
-    pred_color = (pred_color - gt_color.min()) / (gt_color.max() - gt_color.min())
-    gt_color = (gt_color - gt_color.min()) / (gt_color.max() - gt_color.min())
-
     print("pred = ", pred_color.min(), pred_color.max(), pred_color.mean())
     print("gt = ", gt_color.min(), gt_color.max(), gt_color.mean())
 
     save_dir = os.path.dirname(save_path)
-    cm = plt.get_cmap("Greens")
-    pred_image = np.flip(pred_color.reshape(H, W).cpu().numpy(), axis=0)
-    pred_image = cm(pred_image) * 255.0
-    pred_image[inf_mask] = np.inf
-    pred_image[zero_mask] = np.inf
-    Image.fromarray((pred_image).astype(np.uint8)).save(
-        os.path.join(save_dir, "pred_time.png")
+    zero_mask = (gt_color.abs() < 1e-6).reshape(H, W)
+    pred_image = SaveGrayTensorToColor(
+        save_path=os.path.join(save_dir, "pred_time.png"),
+        x=pred_color,
+        colormap="Greens",
+        inf_masks=[mask, zero_mask],
+        y_flip=True,
+        ignore_zeros=True,
     )
-    gt_image = np.flip(gt_color.reshape(H, W).cpu().numpy(), axis=0)
-    gt_image = cm(gt_image) * 255.0
-    gt_image[inf_mask] = np.inf
-    gt_image[zero_mask] = np.inf
-    Image.fromarray((gt_image).astype(np.uint8)).save(
-        os.path.join(save_dir, "gt_time.png")
+    gt_image = SaveGrayTensorToColor(
+        save_path=os.path.join(save_dir, "gt_time.png"),
+        x=gt_color,
+        colormap="Greens",
+        inf_masks=[mask, zero_mask],
+        y_flip=True,
+        ignore_zeros=True,
     )
+
+    pred_image[pred_image == np.inf] = 0
+    gt_image[gt_image == np.inf] = 0
+    pred_mse = ((pred_image - gt_image) ** 2).mean()
+    f_max = gt_image.max()
+    pred_psnr = 20 * np.log10(f_max / np.sqrt(pred_mse))
+    print(f"report MSE = {pred_mse}, psnr = {pred_psnr}")
+
+
+def SaveGrayTensorToColor(
+    save_path: str,
+    x: torch.Tensor,
+    colormap: str = "rainbow",
+    inf_masks: List[torch.Tensor] = [],
+    y_flip=True,
+    ignore_zeros: bool = True,
+) -> torch.Tensor:
+    cm = plt.get_cmap(colormap)
+
+    x = NormalizeTensor(x, ignore_zeros=ignore_zeros, keep_vacancy=False)
+    x = x.squeeze()  # [(D), H, W]
+    if len(x.shape) > 3 or len(x.shape) < 2:
+        raise RuntimeError(
+            f"Mapping gray image to color, the maximum valid shape is [(D), H, W]"
+            f"However, your input dimension is [{x.shape}]"
+        )
+    elif len(x.shape) == 3:
+        x = x.mean(dim=0)  # [H, W]
+
+    np_x = x.cpu().numpy()  # [H, W]
+    if y_flip:
+        np_x = np.flip(np_x, axis=0)  # [H, W]
+
+    np_x = cm(np_x) * 255.0  # [H, W, 4]
+    result_x = np_x / 255.0
+    H, W, n_ch = np_x.shape
+    for inf_mask in inf_masks:
+        if isinstance(inf_mask, torch.Tensor):
+            inf_mask = inf_mask.squeeze()
+            if len(inf_mask.shape) == 3:
+                inf_mask = inf_mask.mean(dim=0)  # [H, W]
+
+            assert inf_mask.shape[0] == H
+            assert inf_mask.shape[1] == W
+            assert len(inf_mask.shape) == 2
+            inf_mask = inf_mask.unsqueeze(-1).repeat(1, 1, n_ch)
+            np_inf_mask = inf_mask.cpu().numpy()
+
+            if y_flip:
+                np_inf_mask = np.flip(np_inf_mask, axis=0)
+        elif inf_mask is None:
+            continue
+        else:
+            raise RuntimeError("We only accept format: torch.Tensor as input mask")
+
+        np_x[np_inf_mask] = np.inf
+        result_x[np_inf_mask] = 0
+
+    Image.fromarray((np_x).astype(np.uint8)).save(save_path)
+
+    return result_x
+
+
+def NormalizeTensor(
+    x: torch.Tensor,
+    min_val: float = 0,
+    max_val: float = 1,
+    ignore_zeros: bool = True,
+    keep_vacancy: bool = False,
+):
+    vacancy_mask = ~torch.isfinite(x)
+    x[vacancy_mask] = x.mean()
+
+    zero_mask = None
+    if ignore_zeros:
+        zero_mask = x.abs() < 1e-8
+        x[zero_mask] = x.mean()
+
+    x = (x - x.min()) / (x.max() - x.min())  # -> min 0, max 1
+    x = x * (max_val - min_val) + min_val
+
+    if zero_mask is not None:
+        x[zero_mask] = 0
+
+    if keep_vacancy:
+        x[vacancy_mask] = torch.inf
+    else:
+        x[vacancy_mask] = 0
+
+    return x
 
 
 def create_2d_meshgrid_tensor(
