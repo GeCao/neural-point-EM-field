@@ -49,7 +49,7 @@ class LightFieldNet(nn.Module):
         self.AttentionModule = (
             PointFeatureAttention(
                 feat_dim_in=self.n_pt_features,
-                feat_dim_out=self.n_pt_features,
+                feat_dim_out=self.n_pt_features * self.output_ch,
                 embeded_dim=256,
                 n_att_heads=8,
                 kdim=128,
@@ -86,7 +86,7 @@ class LightFieldNet(nn.Module):
         )
 
         self.n_SH = 9
-        self.ch_linear = DenseLayer(W, output_ch * self.n_SH, activate=False)
+        self.ch_linear = DenseLayer(W, self.n_SH, activate=False)
         self.SH_basis_hlp = [
             0.5 / math.sqrt(math.pi),
             math.sqrt(3.0 / (4.0 * math.pi)),
@@ -129,8 +129,12 @@ class LightFieldNet(nn.Module):
             tx_distance=rx_to_probe_and_tx_distance[..., -1:, :],
             tx_azimuth=rx_to_probe_and_tx_azimuth[..., -1:, :],
             tx_elevation=rx_to_probe_and_tx_elevation[..., -1:, :],
-        )  # [B, n_rays+1, feat_ch]
+        )  # [B, n_rays+1, feat_ch * n_ch]
+        z = z.reshape(n_batch, n_rays + 1, feat_ch, self.output_ch)
+        z = z.permute((0, 3, 1, 2)).reshape(n_batch * self.output_ch, n_rays + 1, feat_ch)
         ray_info = self.pose_encoding(ray_d)  # [B, 1, ray_ch]
+        ray_info = ray_info.unsqueeze(1).repeat(1, self.output_ch, 1, 1)
+        ray_info = ray_info.reshape(n_batch * self.output_ch, *ray_info.shape[2:])
 
         if not self.layer_modulation:
             inputs = torch.cat([z, ray_info], dim=-1).view(n_batch, -1, self.input_ch)
@@ -145,8 +149,8 @@ class LightFieldNet(nn.Module):
                 h = torch.cat([inputs, h], -1)
 
         out = self.ch_linear(h, z=z)
-        out = out.reshape(n_batch, n_rays + 1, self.output_ch, self.n_SH)
-        # out = [B, n_rays+1, ch*9]
+        out = out.reshape(n_batch, self.output_ch, n_rays + 1, self.n_SH)
+        out = out.permute((0, 2, 1, 3))  # [B, n_rays+1, n_ch, 9]
 
         # Try SH-encoder (with n = 3)
         assert self.n_SH == 9

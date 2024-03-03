@@ -2,6 +2,7 @@ import os
 import torch
 from typing import Dict, Optional, List, Union
 from operator import itemgetter
+from pytorch3d.structures import Meshes
 
 from src.EM.managers import AbstractManager
 from src.EM.scenes import AbstractScene, Transmitter, Camera, RaySampler
@@ -10,6 +11,8 @@ from src.EM.utils import (
     LoadMeshes,
     LoadPointCloudFromMesh,
     create_2d_meshgrid_tensor,
+    DumpCFGFile,
+    export_asset,
 )
 
 
@@ -43,18 +46,56 @@ class NeuralScene(AbstractScene):
         self.is_training = self.opt["is_training"]
         validation_target = self.opt["validation_target"]
         data_set = self.opt["data_set"]
+        has_floor = os.path.exists(os.path.join(data_path, "floors"))
 
-        self.meshes, AABB_before_scale, self.AABB = LoadMeshes(
+        verts, faces = LoadMeshes(
             data_path=data_path, device=torch.device("cpu"), dtype=dtype
         )
+        num_pts_floor = 1000 if has_floor else 0
+        self.point_clouds = LoadPointCloudFromMesh(
+            meshes=Meshes(verts=verts, faces=faces), num_pts_samples=4000 - num_pts_floor
+        )  # [F, n_pts, 3]
+        if has_floor:
+            verts_floor, faces_floor = LoadMeshes(
+                data_path=data_path, obj_folder="floors", device=torch.device("cpu"), dtype=dtype
+            )
+            self.point_clouds = torch.cat(
+                (
+                    self.point_clouds,
+                    LoadPointCloudFromMesh(meshes=Meshes(verts=verts_floor, faces=faces_floor), num_pts_samples=num_pts_floor),
+                ),
+                dim=-2,
+            )
+            vert_offset = verts.shape[-2]
+            verts = torch.cat((verts, verts_floor), dim=-2)
+            faces = torch.cat((faces, faces_floor + vert_offset), dim=-2)
+        
+        # Normalization
+        verts_min = verts.reshape(-1, 3).min(dim=0)[0].reshape(3)
+        verts_max = verts.reshape(-1, 3).max(dim=0)[0].reshape(3)
+        verts_len, scale_dim = (verts_max - verts_min).max(dim=0)
+        AABB_before_scale = torch.stack((verts_min, verts_max), dim=0)  # [2, dim]
+
+        verts = 2.0 * (verts - verts_min[scale_dim]) / verts_len - 1.0
+        self.point_clouds = 2.0 * (self.point_clouds - verts_min[scale_dim]) / verts_len - 1.0
+        print("verts = ", verts.min(dim=-2)[0], verts.max(dim=-2)[0])
+        print("pts = ", self.point_clouds.min(dim=-2)[0], self.point_clouds.max(dim=-2)[0])
+        self.meshes = Meshes(verts=verts, faces=faces, textures=None)
+
+        verts_min = verts.reshape(-1, 3).min(dim=0)[0].reshape(1, 3)
+        verts_max = verts.reshape(-1, 3).max(dim=0)[0].reshape(1, 3)
+        self.AABB = torch.cat((verts_min, verts_max), dim=0)  # [2, dim]
+
+        DumpCFGFile(
+            save_path="/home/moritz/homework/neural-point-EM-field/demo/pointcloud.cfg",
+            point_clouds=self.point_clouds,
+        )
+        self.point_clouds = self.point_clouds.to(device)
+
         self.InfoLog(f"Before scaling, scene AABB: {AABB_before_scale.tolist()}")
         self.InfoLog(f"After scaling, scene AABB: {self.AABB.tolist()}")
         self.AABB = self.AABB.to(device)
         AABB_before_scale = AABB_before_scale.to(device)
-        self.point_clouds = LoadPointCloudFromMesh(
-            meshes=self.meshes, num_pts_samples=4000
-        )  # [F, n_pts, 3]
-        self.point_clouds = self.point_clouds.to(device)
         self.log_manager.InfoLog(
             f"Point Clouds loading finished, with shape={self.point_clouds.shape}"
         )
@@ -294,7 +335,9 @@ class NeuralScene(AbstractScene):
             )  # [1, 2, H, W]
             light_probe = light_probe + 0.5
             max_HW = max(H, W)
-            light_probe = 2.0 * (light_probe / max_HW) - 1.0
+            light_probe = 2.0 * light_probe / max_HW  # ->[0.0, 2.0]
+            light_probe[:, 0, ...] += self.AABB[0, 0]
+            light_probe[:, 1, ...] += self.AABB[0, 1]
             light_probe = light_probe.reshape(2, -1).transpose(0, 1)
             z_mean = self.GetPointCloud(env_index=env_idx)[..., 2:3].mean()
             light_probe = torch.cat(
@@ -303,7 +346,9 @@ class NeuralScene(AbstractScene):
 
             self.light_probe_pos = light_probe
             self.InfoLog(
-                f"Light Probe position prepared, with shape = {self.light_probe_pos.shape}"
+                f"Light Probe position prepared, with shape = {light_probe.shape}, "
+                f"AABB = min {self.AABB[0]} + max {self.AABB[1]}, "
+                f"light probe range = min {light_probe.min(dim=0)[0]} + max {light_probe.max(dim=0)[0]}, "
             )
 
         self.InfoLog("Neural Scene fully prepared.")

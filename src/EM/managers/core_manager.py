@@ -147,17 +147,17 @@ class CoreManager(AbstractManager):
 
         if self.scene.H is not None and self.scene.W is not None:
             H, W = self.scene.H, self.scene.W
-            aspect = int(W / H)
-            fig, ax = plt.subplots(1, 1, figsize=(aspect * 14, 6))
+            blank_wid = 5
+            aspect = int((2.0 * W + blank_wid) / H)
+            fig, ax = plt.subplots(1, 1)
             # plt.pcolormesh(new_gains)
-            plt.title("Prediction - Ground truth")
+            # plt.title("Prediction - Ground truth")
             np_pred_gains = predicted_gains.cpu().numpy()
             np_gt_gains = gt_gains.cpu().numpy()
             np_pred_gains[np.abs(np_gt_gains) < 0.01] = np.inf
             np_gt_gains[np.abs(np_gt_gains) < 0.01] = np.inf
             np_pred_gains = np_pred_gains.reshape(H, W)
             np_gt_gains = np_gt_gains.reshape(H, W)
-            blank_wid = 5
             blank_gain = np.zeros_like(np_gt_gains[..., 0:blank_wid])
             blank_gain[...] = np.inf
             np_pred_gt_gains = np.concatenate(
@@ -165,11 +165,16 @@ class CoreManager(AbstractManager):
                 axis=-1,
             )
             if tx_pos is not None:
-                tx_pos = tx_pos[..., 0:2].reshape(-1, 2)
-                tx_pos[..., 0] = 0.5 * (tx_pos[..., 0] + 1.0) * W
-                tx_pos[..., 1] = 0.5 * (tx_pos[..., 1] + 1.0) * H
+                tx_pos = tx_pos[..., 0:2].reshape(-1, 2)  # in AABBB
+                AABB = self.scene.GetAABB()  # [2, dim]
+                AABB_len = AABB[..., 1, :] - AABB[..., 0, :]  # [dim,]
+                AABB_min = AABB[..., 0, :]
+                tx_pos = (tx_pos - AABB_min[..., 0:2]) / AABB_len[..., 0:2]
+                tx_pos[..., 0] = tx_pos[..., 0] * W
+                tx_pos[..., 1] = tx_pos[..., 1] * H
             plt.imshow(np_pred_gt_gains, origin="lower")
-            plt.colorbar()
+            # plt.colorbar()
+            plt.axis("off")
             if tx_pos is not None:
                 x, y = (
                     tx_pos[:, 0].cpu().numpy(),
@@ -182,7 +187,7 @@ class CoreManager(AbstractManager):
                     tx_pos[:, 1].cpu().numpy(),
                 )
                 plt.scatter(x, y, c="red", marker="x")
-            plt.savefig(save_path)
+            plt.savefig(save_path, pad_inches=0, bbox_inches='tight')
             plt.close()
 
             import h5py

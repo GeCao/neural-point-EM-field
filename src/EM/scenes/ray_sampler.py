@@ -47,7 +47,7 @@ class RaySampler(nn.Module):
     ):
         # Prepare everything:
         is_ablation = scene.is_ablation
-        n_rays = self.K_closest
+        n_rays = 8  # self.K_closest
         K_closest = self.K_closest
         ch, rx, tx = scene.GetData(train_type, validation_name=validation_name)[0:3]
         interactions = scene.GetInterections(

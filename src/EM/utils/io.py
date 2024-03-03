@@ -9,9 +9,9 @@ import cv2
 from PIL import Image
 from typing import List
 from plyfile import PlyData, PlyElement
-from pytorch3d.structures import Meshes
 from pytorch3d.renderer import Textures
 from pytorch3d.ops import sample_points_from_meshes
+from pytorch3d.structures import Meshes
 
 
 def mkdir(path: str):
@@ -20,8 +20,8 @@ def mkdir(path: str):
 
 
 def LoadMeshes(
-    data_path: str, device: torch.device = torch.device("cpu"), dtype=torch.float32
-) -> Meshes:
+    data_path: str, obj_folder: str = "objs", device: torch.device = torch.device("cpu"), dtype=torch.float32
+) -> List[torch.Tensor]:
     """Load mesh data from disk
     We will typically load mesh from json file where,
         'verts'--------[NumOfVertices, 3]
@@ -33,7 +33,7 @@ def LoadMeshes(
     are given.
     """
     is_sionna = "sionna" in data_path
-    obj_path = os.path.join(data_path, "objs")
+    obj_path = os.path.join(data_path, obj_folder)
     if not os.path.exists(obj_path):
         raise RuntimeError(
             f"Mesh object path :{obj_path} not found, check your DataSet"
@@ -41,13 +41,10 @@ def LoadMeshes(
     data_files = os.listdir(obj_path)
     data_files = sorted(data_files)
 
-    meshes = []
     vertices = []
     faces = []
     edges = []
     verts_rgba = []
-    materials = {}
-    visible = {}
     if not is_sionna:
         for filename in data_files:
             if filename[-5:] == ".json" and "1" in filename:
@@ -88,8 +85,17 @@ def LoadMeshes(
                 new_f = (
                     torch.Tensor(scene.meshes[None].faces).to(device).to(torch.int32)
                 )
-                vertices.append(new_v)
-                faces.append(new_f)
+
+                new_v = new_v.reshape(1, -1, 3)
+                new_f = new_f.reshape(1, -1, 3)
+                
+                if len(vertices) == 0:
+                    vertices = new_v
+                    faces = new_f
+                else:
+                    vert_offset = vertices.shape[-2]
+                    vertices = torch.cat((vertices, new_v), dim=-2)
+                    faces = torch.cat((faces, new_f + vert_offset), dim=-2)
             elif filename[-4:] == ".ply":
                 json_path = os.path.join(obj_path, filename)
                 ply_data = o3d.io.read_triangle_mesh(json_path)
@@ -106,7 +112,7 @@ def LoadMeshes(
                     vertices = new_v
                     faces = new_f
                 else:
-                    vert_offset = vertices.shape[0]
+                    vert_offset = vertices.shape[-2]
                     vertices = torch.cat((vertices, new_v), dim=-2)
                     faces = torch.cat((faces, new_f + vert_offset), dim=-2)
 
@@ -114,33 +120,34 @@ def LoadMeshes(
         vertices = torch.cat(vertices, dim=-2).reshape(1, -1, 3)
         faces = torch.cat(faces, dim=-2).to(torch.int64).reshape(1, -1, 3)
 
-    print(vertices.shape, faces.shape)
-
-    vertices_min = vertices.reshape(-1, 3).min(dim=0)[0].reshape(3)
-    vertices_max = vertices.reshape(-1, 3).max(dim=0)[0].reshape(3)
-    vertices_len, scale_dim = (vertices_max - vertices_min).max(dim=0)
-    AABB_before_scale = torch.stack((vertices_min, vertices_max), dim=0)  # [2, dim]
-
-    vertices = 2.0 * (vertices - vertices_min[scale_dim]) / vertices_len - 1.0
-    meshes = Meshes(verts=vertices, faces=faces, textures=None)
-
-    vertices_min = vertices.reshape(-1, 3).min(dim=0)[0].reshape(1, 3)
-    vertices_max = vertices.reshape(-1, 3).max(dim=0)[0].reshape(1, 3)
-    AABB = torch.cat((vertices_min, vertices_max), dim=0)  # [2, dim]
-
-    return meshes, AABB_before_scale, AABB
+    return [vertices, faces]
 
 
 def LoadPointCloudFromMesh(meshes: Meshes, num_pts_samples: int) -> torch.Tensor:
     point_clouds, normals = sample_points_from_meshes(
         meshes, num_samples=num_pts_samples, return_normals=True
     )  # [F, NumOfSamples, 3]
-
-    # DumpCFGFile(
-    #     save_path="/home/gecao2/homework/ACEM/neural-point-EM-field/demo/pointcloud.cfg",
-    #     point_clouds=point_clouds,
-    # )
     return point_clouds
+
+
+def export_asset(save_path: str, vertices: torch.Tensor, faces: torch.Tensor):
+    np_faces = faces.reshape(-1, 3).to(torch.int).cpu().numpy()
+    np_vertices = vertices.reshape(-1, 3).cpu().numpy()
+    if np_faces.min() == 0:
+        np_faces = np_faces + 1
+    with open(save_path, "w") as f:
+        f.write("# OBJ file\n")
+        for i in range(np_vertices.shape[0]):
+            f.write(
+                "v {} {} {}\n".format(
+                    np_vertices[i, 0], np_vertices[i, 1], np_vertices[i, 2]
+                )
+            )
+        for j in range(np_faces.shape[0]):
+            f.write(
+                "f {} {} {}\n".format(np_faces[j, 0], np_faces[j, 1], np_faces[j, 2])
+            )
+    f.close()
 
 
 def DumpCFGFile(save_path: str, point_clouds: torch.Tensor):

@@ -18,7 +18,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter, allow_abbrev=False
     )
-    parser.add_argument("--is_training", type=bool, default=True, help="Train?")
+    parser.add_argument("--is_training", type=bool, default=False, help="Train?")
     parser.add_argument(
         "--validation_target",
         type=str,
@@ -40,7 +40,7 @@ if __name__ == "__main__":
         ],
         help="Train?",
     )
-    parser.add_argument("--batch_size", type=int, default=128, help="Size of Batch")
+    parser.add_argument("--batch_size", type=int, default=1000, help="Size of Batch")
     parser.add_argument(
         "--num_workers",
         type=int,
@@ -49,12 +49,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--lr", type=float, default=0.0001, help="learning rate")
     parser.add_argument(
-        "--use_check_point", type=bool, default=False, help="Use Check Point?"
+        "--use_check_point", type=bool, default=True, help="Use Check Point?"
     )
     parser.add_argument(
-        "--save_check_point", type=bool, default=True, help="Save Check Point?"
+        "--save_check_point", type=bool, default=False, help="Save Check Point?"
     )
-    parser.add_argument("--total_steps", type=int, default=300, help="Total Steps")
+    parser.add_argument("--total_steps", type=int, default=500, help="Total Steps")
 
     parser.add_argument(
         "--dim", type=int, default=3, choices=[3], help="dimension: 2D or 3D"

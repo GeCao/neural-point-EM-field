@@ -507,9 +507,9 @@ class PointLFEMModel(object):
                     # elevation
                     # predicted_ch = torch.cos(predicted_ch[:, :, 4:5]).mean(dim=1)
                     # gt_ch = torch.cos(gt_ch[:, :, 4:5]).mean(dim=1)
-                elif len(predicted_ch.shape) == 4:
-                    predicted_ch = predicted_ch[..., 2:3]
-                    gt_ch = gt_ch[..., 2:3]
+                elif predicted_ch.shape[-1] == 4:
+                    predicted_ch = predicted_ch[..., 0:1]
+                    gt_ch = gt_ch[..., 0:1]
                 predicted_gains = torch.cat(
                     (predicted_gains[..., 0:1], predicted_ch[..., 0:1]), dim=0
                 )

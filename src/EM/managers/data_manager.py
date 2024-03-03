@@ -139,7 +139,7 @@ class DataManager(object):
         if "sionna" in str(data_path):
             # Different data management
             data_files = os.listdir(data_path)
-            target_list = ["030"]
+            target_list = ["111"]
         else:
             target_list = ["checkerboard", "genz", "gendiag"]
             if validation_target == "all":
@@ -227,7 +227,7 @@ class DataManager(object):
                     ch = np.array(data["gain"])  # [T, H, W, 4]
                     rx = np.array(data["rx"])  # [T, H, W, dim=3]
                     tx = np.array(data["tx"])  # [T, dim=3]
-                    T, H, W, n_ch = rx.shape
+                    T, H, W, n_ch = ch.shape
                     if n_ch != 4:
                         raise RuntimeError("Regenerate your dataset!")
                     ch = ch.reshape(1, T, H * W, 4)  # [F, T, H*W, 1]
@@ -303,7 +303,7 @@ class DataManager(object):
                     result["train"][2][:, idx : idx + 1, ...],
                 ]
 
-            vali_idx = vali_idx + [31, 32, 42, 43, 44]
+            vali_idx = vali_idx + [30, 31, 32, 54, 55, 56, 112, 113]
             vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]
             print(f"Load validation name {vali_idx} from train dataset")
             for i in range(len(vali_idx)):
