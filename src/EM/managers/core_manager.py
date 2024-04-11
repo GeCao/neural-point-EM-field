@@ -165,11 +165,7 @@ class CoreManager(AbstractManager):
                 axis=-1,
             )
             if tx_pos is not None:
-                tx_pos = tx_pos[..., 0:2].reshape(-1, 2)  # in AABBB
-                AABB = self.scene.GetAABB()  # [2, dim]
-                AABB_len = AABB[..., 1, :] - AABB[..., 0, :]  # [dim,]
-                AABB_min = AABB[..., 0, :]
-                tx_pos = (tx_pos - AABB_min[..., 0:2]) / AABB_len[..., 0:2]
+                tx_pos = tx_pos.reshape(-1, 3)[:, 0:2]
                 tx_pos[..., 0] = tx_pos[..., 0] * W
                 tx_pos[..., 1] = tx_pos[..., 1] * H
             plt.imshow(np_pred_gt_gains, origin="lower")

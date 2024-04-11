@@ -521,6 +521,10 @@ class PointLFEMModel(object):
                     train_type=int(TrainType.VALIDATION),
                     validation_name=self.scene.validation_target[0],
                 ).GetSourceLocation()
+                AABB = self.scene.GetAABB()  # [2, dim]
+                AABB_len = AABB[..., 1, :] - AABB[..., 0, :]  # [dim,]
+                AABB_min = AABB[..., 0, :]
+                tx_pos = (tx_pos - AABB_min) / AABB_len
 
         mean_test_loss = np.array(test_loss_list).mean()
         return [mean_test_loss, tx_pos, rx_pos, predicted_gains, gt_gains]

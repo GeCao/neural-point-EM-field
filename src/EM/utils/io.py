@@ -88,7 +88,7 @@ def LoadMeshes(
 
                 new_v = new_v.reshape(1, -1, 3)
                 new_f = new_f.reshape(1, -1, 3)
-                
+
                 if len(vertices) == 0:
                     vertices = new_v
                     faces = new_f
@@ -213,9 +213,7 @@ def DumpGrayFigureToRGB(
 
     blank_wid = 5
     if extra_spot is not None:
-        extra_spot = extra_spot[..., 0:2].reshape(-1, 2)
-        extra_spot[..., 0] = 0.5 * (extra_spot[..., 0] + 1.0) * W
-        extra_spot[..., 1] = 0.5 * (extra_spot[..., 1] + 1.0) * H
+        extra_spot = extra_spot.reshape(-1, 3)[:, 0:2] * max(H, W)
 
     pred_color = pred_color.reshape(H, W)
     if gt_color is not None:

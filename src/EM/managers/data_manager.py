@@ -139,7 +139,12 @@ class DataManager(object):
         if "sionna" in str(data_path):
             # Different data management
             data_files = os.listdir(data_path)
-            target_list = ["111"]
+            if "etoicenter" in str(data_path):
+                target_list = ["111"]
+            elif "etoile" in str(data_path):
+                target_list = ["033"]
+            else:
+                target_list = ["111"]
         else:
             target_list = ["checkerboard", "genz", "gendiag"]
             if validation_target == "all":
@@ -303,7 +308,12 @@ class DataManager(object):
                     result["train"][2][:, idx : idx + 1, ...],
                 ]
 
-            vali_idx = vali_idx + [30, 31, 32, 54, 55, 56, 112, 113]
+            if "etoicenter" in str(data_path):
+                vali_idx = vali_idx + [30, 31, 32, 54, 55, 56, 112, 113]
+            elif "etoile" in str(data_path):
+                vali_idx = vali_idx + [34, 35, 54, 55, 56, 66, 67, 68]
+            else:
+                vali_idx = vali_idx + [30, 31, 32, 54, 55, 56, 112, 113]
             vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]
             print(f"Load validation name {vali_idx} from train dataset")
             for i in range(len(vali_idx)):

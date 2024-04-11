@@ -18,7 +18,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter, allow_abbrev=False
     )
-    parser.add_argument("--is_training", type=bool, default=False, help="Train?")
+    parser.add_argument("--is_training", type=bool, default=True, help="Train?")
     parser.add_argument(
         "--validation_target",
         type=str,
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set",
         type=str,
-        default="sionna_etoicenter",
+        default="sionna_etoile",
         choices=[
             "sionna_munich",
             "sionna_etoile",
@@ -47,12 +47,12 @@ if __name__ == "__main__":
         default=0,
         help="When sample data from dataset, indicate a number of work threads",
     )
-    parser.add_argument("--lr", type=float, default=0.0001, help="learning rate")
+    parser.add_argument("--lr", type=float, default=0.00001, help="learning rate")
     parser.add_argument(
         "--use_check_point", type=bool, default=True, help="Use Check Point?"
     )
     parser.add_argument(
-        "--save_check_point", type=bool, default=False, help="Save Check Point?"
+        "--save_check_point", type=bool, default=True, help="Save Check Point?"
     )
     parser.add_argument("--total_steps", type=int, default=500, help="Total Steps")
 
