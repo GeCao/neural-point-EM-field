@@ -20,7 +20,10 @@ def mkdir(path: str):
 
 
 def LoadMeshes(
-    data_path: str, obj_folder: str = "objs", device: torch.device = torch.device("cpu"), dtype=torch.float32
+    data_path: str,
+    obj_folder: str = "objs",
+    device: torch.device = torch.device("cpu"),
+    dtype=torch.float32,
 ) -> List[torch.Tensor]:
     """Load mesh data from disk
     We will typically load mesh from json file where,
@@ -150,30 +153,41 @@ def export_asset(save_path: str, vertices: torch.Tensor, faces: torch.Tensor):
     f.close()
 
 
-def DumpCFGFile(save_path: str, point_clouds: torch.Tensor):
+def DumpCFGFile(
+    save_path: str,
+    point_clouds: torch.Tensor,
+    colors: torch.Tensor = None,
+    with_floor: bool = True,
+    with_normalization: bool = True,
+):
     point_clouds = point_clouds.reshape(-1, 3)
     bounding_box = [
         point_clouds.min(dim=0)[0].reshape(3),
         point_clouds.max(dim=0)[0].reshape(3),
     ]
-    point_clouds = point_clouds + bounding_box[0].unsqueeze(0)
-    point_clouds = point_clouds * 100
-    bounding_box = [
-        point_clouds.min(dim=0)[0].reshape(3),
-        point_clouds.max(dim=0)[0].reshape(3),
-    ]
+    if with_normalization:
+        point_clouds = point_clouds + bounding_box[0].unsqueeze(0)
+        point_clouds = point_clouds * 100
+        bounding_box = [
+            point_clouds.min(dim=0)[0].reshape(3),
+            point_clouds.max(dim=0)[0].reshape(3),
+        ]
+    lengths = bounding_box[1] - bounding_box[0]
+    length_x = max(lengths[0], lengths[1], lengths[2])
+    length_y = max(lengths[0], lengths[1], lengths[2])
+    length_z = max(lengths[0], lengths[1], lengths[2])
     with open(save_path, "w+") as fp:
         fp.write(f"Number of particles = {point_clouds.shape[0]}\n")
         fp.write("A = 1 Angstrom (basic length-scale)\n")
-        fp.write(f"H0(1,1) = {bounding_box[1][0] - bounding_box[0][0]} A\n")
+        fp.write(f"H0(1,1) = {length_x} A\n")
         fp.write(f"H0(1,2) = {0} A\n")
         fp.write(f"H0(1,3) = {0} A\n")
         fp.write(f"H0(2,1) = {0} A\n")
-        fp.write(f"H0(2,2) = {bounding_box[1][1] - bounding_box[0][1]} A\n")
+        fp.write(f"H0(2,2) = {length_y} A\n")
         fp.write(f"H0(2,3) = {0} A\n")
         fp.write(f"H0(3,1) = {0} A\n")
         fp.write(f"H0(3,2) = {0} A\n")
-        fp.write(f"H0(3,3) = {bounding_box[1][2] - bounding_box[0][2]} A\n")
+        fp.write(f"H0(3,3) = {length_z} A\n")
         fp.write(".NO_VELOCITY.\n")
         fp.write(f"entry_count = {3}\n")
 
@@ -181,8 +195,10 @@ def DumpCFGFile(save_path: str, point_clouds: torch.Tensor):
         floor_height = point_clouds[:, 2].min()
         for i in range(point_clouds.shape[0]):
             particle_type = "H"
-            if point_clouds[i, 2] <= floor_height + 0.01:
+            if point_clouds[i, 2] <= floor_height + 0.01 and with_floor:
                 particle_type = "F"
+            if colors is not None:
+                particle_type = str(colors[i].item())
             fp.write(
                 f"{mass}\n{particle_type}\n{point_clouds[i, 0].item()} {point_clouds[i, 1].item()} {point_clouds[i, 2].item()}\n"
             )

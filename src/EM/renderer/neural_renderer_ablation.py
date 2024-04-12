@@ -344,7 +344,7 @@ class PointLightFieldAblation(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
+        pts: torch.Tensor,
         hit_sky: torch.Tensor,
         pts_mask: List[int],
         ray_dirs: torch.Tensor,
@@ -355,7 +355,7 @@ class PointLightFieldAblation(nn.Module):
         """
         Take ray direction and point information, return rendered wireless channel
         Args:
-            x                                (torch.Tensor):                [1, n_pts, dim=3]
+            pts                              (torch.Tensor):                [1, n_pts, dim=3]
             light_probe_pos                  (torch.Tensor):                [n_probes, dim=3]
 
             hit_sky                          (torch.Tensor):                [B, n_rays, K_closest]
@@ -373,10 +373,10 @@ class PointLightFieldAblation(nn.Module):
         n_rays = rx_to_pts_and_tx_distance.shape[1]
         K_closest = rx_to_pts_and_tx_distance.shape[2] - 1
         n_feat = self.n_pt_features
-        n_pts = x.shape[-2]
+        n_pts = pts.shape[-2]
 
         # 1. Transform x so that AABB is a unit cube
-        pts_x = x[..., 0:3].transpose(2, 1)  # [1, 3, n_pts]
+        pts_x = pts[..., 0:3].transpose(2, 1)  # [1, 3, n_pts]
         # 2. Encode point clouds to feature
         feat, trans, trans_feat = self._PointFeatures(
             pts_x, rgb=None

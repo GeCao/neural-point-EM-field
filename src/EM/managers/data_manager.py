@@ -142,7 +142,7 @@ class DataManager(object):
             if "etoicenter" in str(data_path):
                 target_list = ["111"]
             elif "etoile" in str(data_path):
-                target_list = ["033"]
+                target_list = ["054"]
             else:
                 target_list = ["111"]
         else:
@@ -236,6 +236,7 @@ class DataManager(object):
                     if n_ch != 4:
                         raise RuntimeError("Regenerate your dataset!")
                     ch = ch.reshape(1, T, H * W, 4)  # [F, T, H*W, 1]
+                    # ch = ch[..., 0:1]  # TODO:
                     rx = rx[0:T, ...].reshape(1, T, H * W, 3)  # [F, T, H*W, dim=3]
                     tx = np.expand_dims(tx[0:T, ...], axis=0)  # [F, T, dim=3]
                     result["H"] = H
@@ -311,7 +312,7 @@ class DataManager(object):
             if "etoicenter" in str(data_path):
                 vali_idx = vali_idx + [30, 31, 32, 54, 55, 56, 112, 113]
             elif "etoile" in str(data_path):
-                vali_idx = vali_idx + [34, 35, 54, 55, 56, 66, 67, 68]
+                vali_idx = vali_idx + [33, 34, 35, 55, 56, 66, 67, 68]
             else:
                 vali_idx = vali_idx + [30, 31, 32, 54, 55, 56, 112, 113]
             vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]

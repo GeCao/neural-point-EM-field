@@ -12,7 +12,7 @@ from src.EM.utils import (
     LoadPointCloudFromMesh,
     create_2d_meshgrid_tensor,
     DumpCFGFile,
-    export_asset,
+    ModuleType,
 )
 
 
@@ -40,7 +40,7 @@ class NeuralScene(AbstractScene):
         self.log_manager = core_manager._log_manager
 
         self.K_closest = scene_opt["lightfield"].get("k_closest", 8)
-        self.is_ablation = scene_opt["lightfield"]["is_ablation"]
+        self.module_type = self.opt["module_type"]
 
         data_path = core_manager.GetDataPath()
         self.is_training = self.opt["is_training"]
@@ -53,23 +53,30 @@ class NeuralScene(AbstractScene):
         )
         num_pts_floor = 1000 if has_floor else 0
         self.point_clouds = LoadPointCloudFromMesh(
-            meshes=Meshes(verts=verts, faces=faces), num_pts_samples=4000 - num_pts_floor
+            meshes=Meshes(verts=verts, faces=faces),
+            num_pts_samples=4000 - num_pts_floor,
         )  # [F, n_pts, 3]
         if has_floor:
             verts_floor, faces_floor = LoadMeshes(
-                data_path=data_path, obj_folder="floors", device=torch.device("cpu"), dtype=dtype
+                data_path=data_path,
+                obj_folder="floors",
+                device=torch.device("cpu"),
+                dtype=dtype,
             )
             self.point_clouds = torch.cat(
                 (
                     self.point_clouds,
-                    LoadPointCloudFromMesh(meshes=Meshes(verts=verts_floor, faces=faces_floor), num_pts_samples=num_pts_floor),
+                    LoadPointCloudFromMesh(
+                        meshes=Meshes(verts=verts_floor, faces=faces_floor),
+                        num_pts_samples=num_pts_floor,
+                    ),
                 ),
                 dim=-2,
             )
             vert_offset = verts.shape[-2]
             verts = torch.cat((verts, verts_floor), dim=-2)
             faces = torch.cat((faces, faces_floor + vert_offset), dim=-2)
-        
+
         # Normalization
         verts_min = verts.reshape(-1, 3).min(dim=0)[0].reshape(3)
         verts_max = verts.reshape(-1, 3).max(dim=0)[0].reshape(3)
@@ -77,19 +84,19 @@ class NeuralScene(AbstractScene):
         AABB_before_scale = torch.stack((verts_min, verts_max), dim=0)  # [2, dim]
 
         verts = 2.0 * (verts - verts_min[scale_dim]) / verts_len - 1.0
-        self.point_clouds = 2.0 * (self.point_clouds - verts_min[scale_dim]) / verts_len - 1.0
-        print("verts = ", verts.min(dim=-2)[0], verts.max(dim=-2)[0])
-        print("pts = ", self.point_clouds.min(dim=-2)[0], self.point_clouds.max(dim=-2)[0])
+        self.point_clouds = (
+            2.0 * (self.point_clouds - verts_min[scale_dim]) / verts_len - 1.0
+        )
         self.meshes = Meshes(verts=verts, faces=faces, textures=None)
 
         verts_min = verts.reshape(-1, 3).min(dim=0)[0].reshape(1, 3)
         verts_max = verts.reshape(-1, 3).max(dim=0)[0].reshape(1, 3)
         self.AABB = torch.cat((verts_min, verts_max), dim=0)  # [2, dim]
 
-        DumpCFGFile(
-            save_path="/home/moritz/homework/neural-point-EM-field/demo/pointcloud.cfg",
-            point_clouds=self.point_clouds,
-        )
+        # DumpCFGFile(
+        #     save_path="/home/moritz/homework/neural-point-EM-field/demo/pointcloud.cfg",
+        #     point_clouds=self.point_clouds,
+        # )
         self.point_clouds = self.point_clouds.to(device)
 
         self.InfoLog(f"Before scaling, scene AABB: {AABB_before_scale.tolist()}")
@@ -180,12 +187,12 @@ class NeuralScene(AbstractScene):
             self.log_manager.InfoLog(
                 f"[Test]: env={self.n_test_env}, tx={self.n_test_transmitter}, rx={self.n_test_receivers}"
             )
-            print("Train tx: ", self.nodes["train"][2])
 
         self.n_validation_env = {}
         self.n_validation_transmitter = {}
         self.n_validation_receivers = {}
         for target_name in self.validation_target:
+            self.n_ch = data["validation"][target_name][0].shape[-1]
             data["validation"][target_name] = [
                 data["validation"][target_name][i][0:1, ...]
                 for i in range(len(data["validation"][target_name]))
@@ -219,14 +226,11 @@ class NeuralScene(AbstractScene):
             ) = data["validation"][target_name][0].shape[
                 0:3
             ]  # F, T, R
-            self.gain_only = (
-                True if data["validation"][target_name][0].shape[-1] == 4 else False
-            )
+            self.gain_only = True if (self.n_ch == 4 or self.n_ch == 1) else False
 
             self.log_manager.InfoLog(
                 f"[Validation]: env={self.n_validation_env}, tx={self.n_validation_transmitter}, rx={self.n_validation_receivers}"
             )
-            print("Validation tx: ", data["validation"][target_name][2])
         self.nodes["validation"] = data["validation"]
 
         self.ray_sampler = RaySampler(
@@ -257,71 +261,9 @@ class NeuralScene(AbstractScene):
 
     def Initialization(self):
         # Frames
-        train_types = (
-            [
-                int(TrainType.TRAIN),
-                int(TrainType.TEST),
-                int(TrainType.VALIDATION),
-            ]
-            if self.is_training
-            else [int(TrainType.VALIDATION)]
-        )
         env_idx = 0
-        for train_type in train_types:
-            if train_type != int(TrainType.VALIDATION):
-                _, rx_data, tx_data = self.GetData(train_type=train_type)[0:3]
-                n_transmitter = self.GetNumTransmitters(train_type=train_type)
-                n_receivers = self.GetNumReceivers(train_type=train_type)
-                self.transmitters[train_type] = [
-                    Transmitter(
-                        source_location=tx_data[env_idx, tx_idx],
-                        device=self.device,
-                        dtype=self.dtype,
-                    )
-                    for tx_idx in range(n_transmitter)
-                ]
-
-                self.receivers[train_type] = [
-                    [
-                        Camera(
-                            eye=rx_data[env_idx, tx_idx, rx_idx],
-                            device=self.device,
-                            dtype=self.dtype,
-                        )
-                        for rx_idx in range(n_receivers)
-                    ]
-                    for tx_idx in range(n_transmitter)
-                ]
-            else:
-                for validation_name in self.validation_target:
-                    _, rx_data, tx_data = self.GetData(
-                        train_type=train_type, validation_name=validation_name
-                    )[0:3]
-                    n_transmitter = self.GetNumTransmitters(train_type=train_type)
-                    n_receivers = self.GetNumReceivers(train_type=train_type)
-                    self.transmitters[train_type][validation_name] = [
-                        Transmitter(
-                            source_location=tx_data[env_idx, tx_idx],
-                            device=self.device,
-                            dtype=self.dtype,
-                        )
-                        for tx_idx in range(n_transmitter[validation_name])
-                    ]
-
-                    self.receivers[train_type][validation_name] = [
-                        [
-                            Camera(
-                                eye=rx_data[env_idx, tx_idx, rx_idx],
-                                device=self.device,
-                                dtype=self.dtype,
-                            )
-                            for rx_idx in range(n_receivers[validation_name])
-                        ]
-                        for tx_idx in range(n_transmitter[validation_name])
-                    ]
-
         # Light Probe, cover them on our map
-        if not self.is_ablation:
+        if not self.is_ablation():
             self.n_row = 8
             AABB = self.GetAABB()  # [2, dim] -> {min, max}
             AABB_len = (AABB[..., 1, :] - AABB[..., 0, :]).abs()  # [dim,]
@@ -400,33 +342,24 @@ class NeuralScene(AbstractScene):
                 f"while your intput is {train_type}, please take care of your input of scene dataset"
             )
 
-    def GetReceivers(self, train_type: int) -> List[List[Camera]]:
-        return self.receivers[train_type]
-
-    def GetReceiver(
-        self,
-        transmitter_idx: int,
-        receiver_idx: int,
-        train_type: int,
-        validation_name: str = None,
-    ) -> Camera:
-        if train_type == int(TrainType.VALIDATION):
-            return self.receivers[train_type][validation_name][transmitter_idx][
-                receiver_idx
+    def GetTransmitterLocation(
+        self, transmitter_idx: int, train_type: int, validation_name: str = None
+    ) -> torch.Tensor:
+        env_idx = 0
+        if train_type == int(TrainType.TRAIN):
+            return self.nodes["train"][2][env_idx, transmitter_idx]
+        elif train_type == int(TrainType.TEST):
+            return self.nodes["test"][2][env_idx, transmitter_idx]
+        elif train_type == int(TrainType.VALIDATION):
+            return self.nodes["validation"][validation_name][2][
+                env_idx, transmitter_idx
             ]
         else:
-            return self.receivers[train_type][transmitter_idx][receiver_idx]
-
-    def GetTransmitters(self, train_type: int) -> List[Transmitter]:
-        return self.transmitters[train_type]
-
-    def GetTransmitter(
-        self, transmitter_idx: int, train_type: int, validation_name: str = None
-    ) -> Transmitter:
-        if train_type == int(TrainType.VALIDATION):
-            return self.transmitters[train_type][validation_name][transmitter_idx]
-        else:
-            return self.transmitters[train_type][transmitter_idx]
+            self.ErrorLog(
+                f"We only support Train: {int(TrainType.TRAIN)}, "
+                f"Test: {int(TrainType.TEST)}, and Validation: {int(TrainType.VALIDATION)}, "
+                f"while your intput is {train_type}, please take care of your input of scene dataset"
+            )
 
     def GetNumTransmitters(self, train_type: int) -> int:
         if train_type == int(TrainType.TRAIN):
@@ -466,6 +399,12 @@ class NeuralScene(AbstractScene):
                 "We only accept train type input as Train(0), Test(1) and Validation(2), "
                 f"while your input is {train_type}"
             )
+
+    def is_ablation(self):
+        return self.module_type == int(ModuleType.ABLATION)
+
+    def is_MLP(self):
+        return self.module_type == int(ModuleType.MLP)
 
     def GetPointCloud(self, env_index: int) -> torch.Tensor:
         return self.point_clouds[env_index]

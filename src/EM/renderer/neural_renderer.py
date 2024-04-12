@@ -131,7 +131,9 @@ class LightFieldNet(nn.Module):
             tx_elevation=rx_to_probe_and_tx_elevation[..., -1:, :],
         )  # [B, n_rays+1, feat_ch * n_ch]
         z = z.reshape(n_batch, n_rays + 1, feat_ch, self.output_ch)
-        z = z.permute((0, 3, 1, 2)).reshape(n_batch * self.output_ch, n_rays + 1, feat_ch)
+        z = z.permute((0, 3, 1, 2)).reshape(
+            n_batch * self.output_ch, n_rays + 1, feat_ch
+        )
         ray_info = self.pose_encoding(ray_d)  # [B, 1, ray_ch]
         ray_info = ray_info.unsqueeze(1).repeat(1, self.output_ch, 1, 1)
         ray_info = ray_info.reshape(n_batch * self.output_ch, *ray_info.shape[2:])
@@ -349,7 +351,7 @@ class PointLightField(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
+        pts: torch.Tensor,
         probe_pts_mask: List[int],
         ray_dirs: torch.Tensor,
         rx_to_probe_and_tx_distance: torch.Tensor,
@@ -363,7 +365,7 @@ class PointLightField(nn.Module):
         """
         Take ray direction and point information, return rendered wireless channel
         Args:
-            x                                (torch.Tensor):                [1, n_pts, dim=3]
+            pts                              (torch.Tensor):                [1, n_pts, dim=3]
             light_probe_pos                  (torch.Tensor):                [n_probes, dim=3]
 
             probe_pts_mask                   (List[int]):                   x[probe_pts_mask] = [B*n_rays*K_closest, ...]
@@ -385,10 +387,10 @@ class PointLightField(nn.Module):
         n_rays = rx_to_probe_and_tx_distance.shape[1] - 1
         K_closest = probe_to_pts_and_tx_distance.shape[2] - 1
         n_feat = self.n_pt_features
-        n_pts = x.shape[-2]
+        n_pts = pts.shape[-2]
 
         # 1. Transform x so that AABB is a unit cube
-        pts_x = x[..., 0:3].transpose(2, 1)  # [B, 3, n_pts]
+        pts_x = pts[..., 0:3].transpose(2, 1)  # [B, 3, n_pts]
         # 2. Encode point clouds to feature
         feat, trans, trans_feat = self._PointFeatures(
             pts_x, rgb=None

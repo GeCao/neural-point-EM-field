@@ -46,7 +46,7 @@ class RaySampler(nn.Module):
         train_type: int = 0,
     ):
         # Prepare everything:
-        is_ablation = scene.is_ablation
+        is_ablation = scene.is_ablation()
         n_rays = 8  # self.K_closest
         K_closest = self.K_closest
         ch, rx, tx = scene.GetData(train_type, validation_name=validation_name)[0:3]
@@ -140,9 +140,9 @@ class RaySampler(nn.Module):
                 - ray_o[:, :, None, :]
             )  # [FTR, n_rays, K, 3]
             nearest_pts_distance = nearest_pts_r.norm(dim=-1)  # [FTR, n_rays, K]
-            self.nodes[env_idx][train_type]["ray_o"] = ray_o.cpu()
-            self.nodes[env_idx][train_type]["ray_d"] = ray_d.cpu()
-            self.nodes[env_idx][train_type]["hit_sky"] = hit_sky.cpu()
+            self.nodes[env_idx][train_type]["ray_o"] = ray_o.to(self.device)
+            self.nodes[env_idx][train_type]["ray_d"] = ray_d.to(self.device)
+            self.nodes[env_idx][train_type]["hit_sky"] = hit_sky.to(self.device)
 
             tx_rx_r = (tx.unsqueeze(2) - rx).reshape(FTR, 3)  # [FTR, 3]
             tx_rx_dir = F.normalize(tx_rx_r, dim=-1)  # [FTR, 3]
@@ -160,10 +160,10 @@ class RaySampler(nn.Module):
             tx_rx_azimuth = torch.where(
                 tx_rx_r[..., 1:2] < 0.0, 2.0 * math.pi - tx_rx_azimuth, tx_rx_azimuth
             )  # [FTR, 1] -> clamp(0, 2PI)
-            self.nodes[env_idx][train_type]["tx_rx_dir"] = tx_rx_dir.cpu()
-            self.nodes[env_idx][train_type]["tx_rx_distance"] = tx_rx_dist.cpu()
-            self.nodes[env_idx][train_type]["tx_rx_elevation"] = tx_rx_elevation.cpu()
-            self.nodes[env_idx][train_type]["tx_rx_azimuth"] = tx_rx_azimuth.cpu()
+            self.nodes[env_idx][train_type]["tx_rx_dir"] = tx_rx_dir.to(self.device)
+            self.nodes[env_idx][train_type]["tx_rx_distance"] = tx_rx_dist.to(self.device)
+            self.nodes[env_idx][train_type]["tx_rx_elevation"] = tx_rx_elevation.to(self.device)
+            self.nodes[env_idx][train_type]["tx_rx_azimuth"] = tx_rx_azimuth.to(self.device)
 
             # 2. rx - pts info
             scene.InfoLog("Data Preparing: rx - pts information")
@@ -190,23 +190,23 @@ class RaySampler(nn.Module):
             self.nodes[env_idx][train_type]["nearest_indices"] = nearest_indices.cpu()
             self.nodes[env_idx][train_type][
                 "nearest_pts_distance"
-            ] = nearest_pts_distance.cpu()
+            ] = nearest_pts_distance.to(self.device)
             self.nodes[env_idx][train_type][
                 "nearest_pts_elevation"
-            ] = nearest_pts_elevation.cpu()
+            ] = nearest_pts_elevation.to(self.device)
             self.nodes[env_idx][train_type][
                 "nearest_pts_azimuth"
-            ] = nearest_pts_azimuth.cpu()
+            ] = nearest_pts_azimuth.to(self.device)
 
             # 4. ground truth
             scene.InfoLog("Data Preparing: Ground truth")
             if gain_only:
                 self.nodes[env_idx][train_type]["gt_channels"] = ch.reshape(
                     -1, ch.shape[-1]
-                ).cpu()
+                ).to(self.device)
             else:
                 self.nodes[env_idx][train_type]["gt_channels"] = (
-                    ch.reshape(FTR, n_ch, n_rays).transpose(1, 2)[..., 0:5].cpu()
+                    ch.reshape(FTR, n_ch, n_rays).transpose(1, 2)[..., 0:5].to(self.device)
                 )
                 # elevation inverse
                 self.nodes[env_idx][train_type]["gt_channels"][..., 4] = (
@@ -246,8 +246,8 @@ class RaySampler(nn.Module):
                 - ray_o
             )  # [FTR, n_rays, 3]
             ray_d = F.normalize(nearest_light_probe_r, dim=-1)  # [FTR, n_rays, 3]
-            self.nodes[env_idx][train_type]["ray_o"] = ray_o.cpu()
-            self.nodes[env_idx][train_type]["ray_d"] = ray_d.cpu()
+            self.nodes[env_idx][train_type]["ray_o"] = ray_o.to(self.device)
+            self.nodes[env_idx][train_type]["ray_d"] = ray_d.to(self.device)
         else:
             # departure (3, 4) from tx
             # arrival   (5, 6) to rx
@@ -289,8 +289,8 @@ class RaySampler(nn.Module):
                 - ray_o
             )  # [FTR, n_rays, 3]
             nearest_probe_distance = nearest_light_probe_r.norm(dim=-1)  # [FTR, n_rays]
-            self.nodes[env_idx][train_type]["ray_o"] = ray_o.cpu()
-            self.nodes[env_idx][train_type]["ray_d"] = ray_d.cpu()
+            self.nodes[env_idx][train_type]["ray_o"] = ray_o.to(self.device)
+            self.nodes[env_idx][train_type]["ray_d"] = ray_d.to(self.device)
 
         tx_rx_r = (tx.unsqueeze(2) - rx).reshape(FTR, 3)  # [FTR, 3]
         tx_rx_dir = F.normalize(tx_rx_r, dim=-1)  # [FTR, 3]
@@ -308,10 +308,12 @@ class RaySampler(nn.Module):
         tx_rx_azimuth = torch.where(
             tx_rx_r[..., 1:2] < 0.0, 2.0 * math.pi - tx_rx_azimuth, tx_rx_azimuth
         )  # [FTR, 1] -> clamp(0, 2PI)
-        self.nodes[env_idx][train_type]["tx_rx_dir"] = tx_rx_dir.cpu()
-        self.nodes[env_idx][train_type]["tx_rx_distance"] = tx_rx_dist.cpu()
-        self.nodes[env_idx][train_type]["tx_rx_elevation"] = tx_rx_elevation.cpu()
-        self.nodes[env_idx][train_type]["tx_rx_azimuth"] = tx_rx_azimuth.cpu()
+        self.nodes[env_idx][train_type]["tx_rx_dir"] = tx_rx_dir.to(self.device)
+        self.nodes[env_idx][train_type]["tx_rx_distance"] = tx_rx_dist.to(self.device)
+        self.nodes[env_idx][train_type]["tx_rx_elevation"] = tx_rx_elevation.to(
+            self.device
+        )
+        self.nodes[env_idx][train_type]["tx_rx_azimuth"] = tx_rx_azimuth.to(self.device)
 
         # 2. rx - Light Probe info
         scene.InfoLog("Data Preparing: rx - Light probe information")
@@ -336,15 +338,15 @@ class RaySampler(nn.Module):
         )  # [0, 2PI]
 
         self.nodes[env_idx][train_type]["nearest_indices"] = nearest_indices.cpu()
-        self.nodes[env_idx][train_type][
-            "nearest_probe_distance"
-        ] = nearest_probe_distance.cpu()
-        self.nodes[env_idx][train_type][
-            "nearest_probe_elevation"
-        ] = nearest_probe_elevation.cpu()
-        self.nodes[env_idx][train_type][
-            "nearest_probe_azimuth"
-        ] = nearest_probe_azimuth.cpu()
+        self.nodes[env_idx][train_type]["nearest_probe_distance"] = (
+            nearest_probe_distance.to(self.device)
+        )
+        self.nodes[env_idx][train_type]["nearest_probe_elevation"] = (
+            nearest_probe_elevation.to(self.device)
+        )
+        self.nodes[env_idx][train_type]["nearest_probe_azimuth"] = (
+            nearest_probe_azimuth.to(self.device)
+        )
 
         # 3.1 pts(tx) - Light Probe info
         scene.InfoLog("Data Preparing: pts - Light probe information")
@@ -391,18 +393,18 @@ class RaySampler(nn.Module):
         self.nodes[env_idx][train_type][
             "nearest_probe_pts_indices"
         ] = nearest_probe_pts_indices.cpu()
-        self.nodes[env_idx][train_type][
-            "nearest_probe_pts_dir"
-        ] = nearest_probe_pts_dir.cpu()
-        self.nodes[env_idx][train_type][
-            "nearest_probe_pts_distance"
-        ] = nearest_probe_pts_distance.cpu()
-        self.nodes[env_idx][train_type][
-            "nearest_probe_pts_elevation"
-        ] = nearest_probe_pts_elevation.cpu()
-        self.nodes[env_idx][train_type][
-            "nearest_probe_pts_azimuth"
-        ] = nearest_probe_pts_azimuth.cpu()
+        self.nodes[env_idx][train_type]["nearest_probe_pts_dir"] = (
+            nearest_probe_pts_dir.to(self.device)
+        )
+        self.nodes[env_idx][train_type]["nearest_probe_pts_distance"] = (
+            nearest_probe_pts_distance.to(self.device)
+        )
+        self.nodes[env_idx][train_type]["nearest_probe_pts_elevation"] = (
+            nearest_probe_pts_elevation.to(self.device)
+        )
+        self.nodes[env_idx][train_type]["nearest_probe_pts_azimuth"] = (
+            nearest_probe_pts_azimuth.to(self.device)
+        )
         # 3.2 Add tx information into this wrap
         scene.InfoLog("Data Preparing: tx - Light probe information")
         # tx:= [F, T, dim=3]
@@ -432,26 +434,28 @@ class RaySampler(nn.Module):
                 1,
             )
         )  # [n_probe, T, 1] -> clamp(0, PI)
-        self.nodes[env_idx][train_type]["light_probe_tx_dir"] = light_probe_tx_dir.cpu()
-        self.nodes[env_idx][train_type][
-            "light_probe_tx_distance"
-        ] = light_probe_tx_distance.cpu()
-        self.nodes[env_idx][train_type][
-            "light_probe_tx_elevation"
-        ] = light_probe_tx_elevation.cpu()
-        self.nodes[env_idx][train_type][
-            "light_probe_tx_azimuth"
-        ] = light_probe_tx_azimuth.cpu()
+        self.nodes[env_idx][train_type]["light_probe_tx_dir"] = light_probe_tx_dir.to(
+            self.device
+        )
+        self.nodes[env_idx][train_type]["light_probe_tx_distance"] = (
+            light_probe_tx_distance.to(self.device)
+        )
+        self.nodes[env_idx][train_type]["light_probe_tx_elevation"] = (
+            light_probe_tx_elevation.to(self.device)
+        )
+        self.nodes[env_idx][train_type]["light_probe_tx_azimuth"] = (
+            light_probe_tx_azimuth.to(self.device)
+        )
 
         # 4. ground truth
         scene.InfoLog("Data Preparing: Ground truth")
         if gain_only:
             self.nodes[env_idx][train_type]["gt_channels"] = ch.reshape(
                 -1, ch.shape[-1]
-            ).cpu()
+            ).to(self.device)
         else:
             self.nodes[env_idx][train_type]["gt_channels"] = (
-                ch.reshape(FTR, n_ch, n_rays).transpose(1, 2)[..., 0:5].cpu()
+                ch.reshape(FTR, n_ch, n_rays).transpose(1, 2)[..., 0:5].to(self.device)
             )
             # elevation inverse
             self.nodes[env_idx][train_type]["gt_channels"][..., 4] = (
@@ -553,7 +557,7 @@ class RaySampler(nn.Module):
                 train_type=train_type,
             )
 
-        is_ablation = scene.is_ablation
+        is_ablation = scene.is_ablation()
         F_ = scene.GetNumEnvs(train_type=train_type)
         T_ = scene.GetNumTransmitters(train_type=train_type)
         R_ = scene.GetNumReceivers(train_type=train_type)

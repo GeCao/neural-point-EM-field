@@ -77,7 +77,7 @@ class PointLFEMModel(object):
         self.renderer.train()  # Set train flags as true
 
         loss_list = []
-        if self.scene.is_ablation:
+        if self.scene.is_ablation():
             for dataset in self.train_dataloader:
                 ray_o, pts_indices, hit_sky, rx_to_pts_and_tx_info, gt_ch = dataset[0:5]
                 interactions = None if len(dataset) <= 5 else dataset[5]
@@ -97,9 +97,9 @@ class PointLFEMModel(object):
                 Batch_size, n_rays, K_closest = pts_indices.shape[0:3]
                 env_idx = 0
                 pts_mask = pts_indices.flatten().cpu().tolist()  # [B*n_rays*K]
-                x = self.scene.GetPointCloud(env_index=0)  # TODO: [n_pts, 3]
+                pts = self.scene.GetPointCloud(env_index=0)  # TODO: [n_pts, 3]
                 predicted_ch = self.renderer.forward_on_batch_ablation(
-                    x, hit_sky, pts_mask, rx_to_pts_and_tx_info
+                    pts, hit_sky, pts_mask, rx_to_pts_and_tx_info
                 )
 
                 loss = self.loss(predicted_ch, gt_ch, valid_index=valid_index)
@@ -154,9 +154,10 @@ class PointLFEMModel(object):
                 ),
                 dim=-2,
             )  # [B, n_rays, K_closest+1, 6]
-            x = self.scene.GetPointCloud(env_index=0)  # TODO: [n_pts, 3]
+            pts = self.scene.GetPointCloud(env_index=0)  # TODO: [n_pts, 3]
             predicted_ch = self.renderer.forward_on_batch(
-                x,
+                pts,
+                ray_o,
                 rx_to_probe_and_tx_info,
                 probe_to_pts_indices,
                 probe_to_pts_and_tx_info,
@@ -182,7 +183,7 @@ class PointLFEMModel(object):
             predicted_gains = torch.zeros((0, 1)).to(self.device).to(self.dtype)
             gt_gains = torch.zeros((0, 1)).to(self.device).to(self.dtype)
             rx_pos = torch.zeros((0, 3)).to(self.device).to(self.dtype)
-            if self.scene.is_ablation:
+            if self.scene.is_ablation():
                 for dataset in self.validation_dataloader:
                     ray_o, pts_indices, hit_sky, rx_to_pts_and_tx_info, gt_ch = dataset[
                         0:5
@@ -198,9 +199,9 @@ class PointLFEMModel(object):
                     Batch_size, n_rays, K_closest = pts_indices.shape[0:3]
                     env_idx = 0
                     pts_mask = pts_indices.flatten().cpu().tolist()  # [B*n_rays*K]
-                    x = self.scene.GetPointCloud(env_index=0)  # TODO: [n_pts, 3]
+                    pts = self.scene.GetPointCloud(env_index=0)  # TODO: [n_pts, 3]
                     predicted_ch = self.renderer.forward_on_batch_ablation(
-                        x, hit_sky, pts_mask, rx_to_pts_and_tx_info
+                        pts, hit_sky, pts_mask, rx_to_pts_and_tx_info
                     )
                     test_loss = self.loss(predicted_ch, gt_ch, valid_index=valid_index)
                     test_loss_list.append(test_loss.item())
@@ -318,11 +319,11 @@ class PointLFEMModel(object):
                     gt_gains = torch.cat((gt_gains[..., 0:1], gt_ch[..., 0:1]), dim=0)
                     rx_pos = torch.cat((rx_pos, ray_o[:, 0, 0:3]), dim=0)
                     # TODO: tx-idx = 3 only
-                    tx_pos = self.scene.GetTransmitter(
+                    tx_pos = self.scene.GetTransmitterLocation(
                         transmitter_idx=0,
                         train_type=int(TrainType.VALIDATION),
                         validation_name=self.scene.validation_target[0],
-                    ).GetSourceLocation()
+                    )
 
                 mean_test_loss = np.array(test_loss_list).mean()
                 return [mean_test_loss, tx_pos, rx_pos, predicted_gains, gt_gains]
@@ -385,9 +386,10 @@ class PointLFEMModel(object):
                     ),
                     dim=-2,
                 )  # [B, n_rays, K_closest+1, 6]
-                x = self.scene.GetPointCloud(env_index=0)  # TODO: [n_pts, 3]
+                pts = self.scene.GetPointCloud(env_index=0)  # TODO: [n_pts, 3]
                 predicted_ch = self.renderer.forward_on_batch(
-                    x,
+                    pts,
+                    ray_o,
                     rx_to_probe_and_tx_info,
                     probe_to_pts_indices,
                     probe_to_pts_and_tx_info,
@@ -508,19 +510,19 @@ class PointLFEMModel(object):
                     # predicted_ch = torch.cos(predicted_ch[:, :, 4:5]).mean(dim=1)
                     # gt_ch = torch.cos(gt_ch[:, :, 4:5]).mean(dim=1)
                 elif predicted_ch.shape[-1] == 4:
-                    predicted_ch = predicted_ch[..., 0:1]
-                    gt_ch = gt_ch[..., 0:1]
+                    predicted_ch = predicted_ch[..., 3:4]
+                    gt_ch = gt_ch[..., 3:4]
                 predicted_gains = torch.cat(
                     (predicted_gains[..., 0:1], predicted_ch[..., 0:1]), dim=0
                 )
                 gt_gains = torch.cat((gt_gains[..., 0:1], gt_ch[..., 0:1]), dim=0)
                 rx_pos = torch.cat((rx_pos, ray_o[:, 0, 0:3]), dim=0)
                 # TODO: tx-idx = 3 only
-                tx_pos = self.scene.GetTransmitter(
+                tx_pos = self.scene.GetTransmitterLocation(
                     transmitter_idx=0,
                     train_type=int(TrainType.VALIDATION),
                     validation_name=self.scene.validation_target[0],
-                ).GetSourceLocation()
+                )
                 AABB = self.scene.GetAABB()  # [2, dim]
                 AABB_len = AABB[..., 1, :] - AABB[..., 0, :]  # [dim,]
                 AABB_min = AABB[..., 0, :]

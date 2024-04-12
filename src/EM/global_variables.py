@@ -10,7 +10,6 @@ scene_opt = {
     "lrate_decay": 250,
     "netchunk": 65536,
     "lightfield": {
-        "is_ablation": False,
         "k_closest": 8,
         "n_features": 128,
         "n_sample_pts": 500,

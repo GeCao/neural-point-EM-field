@@ -7,7 +7,7 @@ import numpy
 
 from src.EM.scenes import NeuralScene
 from src.EM.utils import ModuleType, NodeType
-from src.EM.renderer import PointLightField, PointLightFieldAblation
+from src.EM.renderer import PointLightField, PointLightFieldAblation, PointLightFieldMLP
 
 
 class PointLightFieldRenderer(nn.Module):
@@ -31,8 +31,8 @@ class PointLightFieldRenderer(nn.Module):
 
     def ParameterInitialization(self):
         module_name = "background"
-        output_ch = 4 if self.scene.gain_only else 6
-        if self.scene.is_ablation:
+        output_ch = self.scene.n_ch if self.scene.gain_only else 6
+        if self.scene.is_ablation():
             lightfield = PointLightFieldAblation(
                 k_closest=self.light_field_opt["k_closest"],
                 n_sample_pts=self.light_field_opt["n_sample_pts"],
@@ -47,6 +47,12 @@ class PointLightFieldRenderer(nn.Module):
                     "poseEnc": self.light_field_opt.get("ray_encoding", 4),
                 },
                 new_encoding=self.light_field_opt.get("new_enc", False),
+                output_ch=output_ch,
+                device=self.device,
+                dtype=self.dtype,
+            )
+        elif self.scene.is_MLP():
+            lightfield = PointLightFieldMLP(
                 output_ch=output_ch,
                 device=self.device,
                 dtype=self.dtype,
@@ -75,7 +81,8 @@ class PointLightFieldRenderer(nn.Module):
 
     def forward_on_batch(
         self,
-        x: torch.Tensor,
+        pts: torch.Tensor,
+        ray_o: torch.Tensor,
         rx_to_probe_and_tx_info: torch.Tensor,
         probe_to_pts_indices: torch.Tensor,
         probe_to_pts_and_tx_info: torch.Tensor,
@@ -84,7 +91,7 @@ class PointLightFieldRenderer(nn.Module):
             # Do not over hierachy
             # exert light_field_module
             # x                           [1, n_pts, 3]
-            x = x.reshape(1, *x.shape[-2:])
+            pts = pts.reshape(1, *pts.shape[-2:])
 
             ray_d = rx_to_probe_and_tx_info[..., 0:3]  # [B, n_rays+1, 3]
             rx_to_probe_and_tx_distance = rx_to_probe_and_tx_info[
@@ -116,7 +123,7 @@ class PointLightFieldRenderer(nn.Module):
             for module_name, module in self.named_modules():
                 if isinstance(module, PointLightField):
                     prediction = module(
-                        x=x,
+                        pts=pts,
                         probe_pts_mask=probe_pts_mask,
                         ray_dirs=ray_d,
                         rx_to_probe_and_tx_distance=rx_to_probe_and_tx_distance,
@@ -128,6 +135,14 @@ class PointLightFieldRenderer(nn.Module):
                         probe_to_pts_and_tx_elevation=probe_to_pts_and_tx_elevation,
                     )
                     return prediction
+                elif isinstance(module, PointLightFieldMLP):
+                    prediction = module(
+                        ray_o=ray_o[:, 0, 0:3],
+                        rx_to_tx_distance=rx_to_probe_and_tx_distance[:, -1, :],
+                        rx_to_tx_azimuth=rx_to_probe_and_tx_azimuth[:, -1, :],
+                        rx_to_tx_elevation=rx_to_probe_and_tx_elevation[:, -1, :],
+                    )
+                    return prediction
                 else:
                     pass
                     # self.scene.WarnLog(f"Unexpected module {module_name} loaded.")
@@ -137,7 +152,7 @@ class PointLightFieldRenderer(nn.Module):
 
     def forward_on_batch_ablation(
         self,
-        x: torch.Tensor,
+        pts: torch.Tensor,
         hit_sky: torch.Tensor,
         pts_mask: List[int],
         rx_to_pts_and_tx_info: torch.Tensor,
@@ -145,8 +160,8 @@ class PointLightFieldRenderer(nn.Module):
         if self.training:
             # Do not over hierachy
             # exert light_field_module
-            # x                           [n_pts, 3]
-            x = x.reshape(1, *x.shape[-2:])
+            # pts                           [n_pts, 3]
+            pts = pts.reshape(1, *pts.shape[-2:])
 
             ray_d = rx_to_pts_and_tx_info[..., 0:3]  # [B, n_rays, K+1, 3]
             rx_to_pts_and_tx_distance = rx_to_pts_and_tx_info[
@@ -162,7 +177,7 @@ class PointLightFieldRenderer(nn.Module):
             for module_name, module in self.named_modules():
                 if isinstance(module, PointLightFieldAblation):
                     prediction = module(
-                        x=x,
+                        pts=pts,
                         hit_sky=hit_sky,
                         pts_mask=pts_mask,
                         ray_dirs=ray_d,

@@ -40,6 +40,13 @@ if __name__ == "__main__":
         ],
         help="Train?",
     )
+    parser.add_argument(
+        "--module_type",
+        type=int,
+        default=0,
+        choices=[0, 1, 2],
+        help="Choice of module type: 0=default, 1=ablation, 2=MLP",
+    )
     parser.add_argument("--batch_size", type=int, default=1000, help="Size of Batch")
     parser.add_argument(
         "--num_workers",
@@ -47,7 +54,7 @@ if __name__ == "__main__":
         default=0,
         help="When sample data from dataset, indicate a number of work threads",
     )
-    parser.add_argument("--lr", type=float, default=0.00001, help="learning rate")
+    parser.add_argument("--lr", type=float, default=0.0001, help="learning rate")
     parser.add_argument(
         "--use_check_point", type=bool, default=True, help="Use Check Point?"
     )

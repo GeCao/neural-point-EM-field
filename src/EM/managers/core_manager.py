@@ -15,6 +15,7 @@ from src.EM.utils import (
     DumpGrayFigureToRGB,
     DeleteFloorOrCeil,
     LoadPointCloudFromMesh,
+    ModuleType,
 )
 from src.EM.models import PointLFEMModel
 from src.EM.scenes import NeuralScene
@@ -27,9 +28,11 @@ class CoreManager(AbstractManager):
         self._demo_path = os.path.abspath(os.curdir)
         self._root_path = os.path.abspath(os.path.join(self._demo_path, ".."))
         self._data_path = os.path.join(self._root_path, "data", opt["data_set"])
-        ablation_prefix = "ablation" if scene_opt["lightfield"]["is_ablation"] else ""
+        prefix = ModuleType.get_str(opt["module_type"])
+        if len(prefix) > 0:
+            prefix = "_" + prefix
         self._save_path = os.path.join(
-            self._root_path, "save", f"{opt['data_set']}_{ablation_prefix}"
+            self._root_path, "save", f"{opt['data_set']}{prefix}"
         )
         mkdir(self._save_path)
 
@@ -183,7 +186,7 @@ class CoreManager(AbstractManager):
                     tx_pos[:, 1].cpu().numpy(),
                 )
                 plt.scatter(x, y, c="red", marker="x")
-            plt.savefig(save_path, pad_inches=0, bbox_inches='tight')
+            plt.savefig(save_path, pad_inches=0, bbox_inches="tight")
             plt.close()
 
             import h5py

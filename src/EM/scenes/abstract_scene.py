@@ -7,22 +7,7 @@ from src.EM.scenes import Camera, Transmitter
 
 class AbstractScene(ABC):
     @abstractmethod
-    def GetReceivers(self, train_type: int) -> List[List[Camera]]: ...
-
-    @abstractmethod
-    def GetReceiver(
-        self,
-        transmitter_idx: int,
-        receiver_idx: int,
-        train_type: int,
-        validation_name: str,
-    ) -> Camera: ...
-
-    @abstractmethod
-    def GetTransmitters(self, train_type: int) -> List[Transmitter]: ...
-
-    @abstractmethod
-    def GetTransmitter(
+    def GetTransmitterLocation(
         self, transmitter_idx: int, train_type: int, validation_name: str
     ) -> Transmitter: ...
 
