@@ -11,26 +11,6 @@ from src.EM.utils import Splatter
 from src.EM.utils import Linear, Quadratic
 
 
-def ScaleToUintCube(points: torch.Tensor, scale: float = 1.0 / 1.4):
-    assert points.dim() == 3 or points.dim() == 2
-
-    batch_size = points.shape[0] if points.dim() == 3 else 1
-    dim = 3
-
-    AABB_min, _ = points.view(batch_size, -1, dim).min(dim=1, keepdim=True)  # [B, 1, 3]
-    AABB_max, _ = points.view(batch_size, -1, dim).max(dim=1, keepdim=True)  # [B, 1, 3]
-
-    scaled_points = (points - AABB_min) * 2 * torch.reciprocal(
-        AABB_max - AABB_min
-    ) - 1.0
-    scaled_points = torch.clamp(scaled_points, -1.0, 1.0)
-
-    scaled_points = scaled_points * scale
-    scaled_points = scaled_points.reshape(*points.shape)
-
-    return scaled_points
-
-
 def PostProcessFeatures(
     feat: torch.Tensor,
     scaled_pts: torch.Tensor,
@@ -169,62 +149,6 @@ def ApplyPositionBasedKernel(
     return output
 
 
-def DrawHeatMapReceivers(
-    rx: torch.Tensor,
-    tx: torch.Tensor,
-    gain: torch.Tensor,
-    radius: float = None,
-    res_x: int = 1024,
-    res_y: int = None,
-) -> List[torch.Tensor]:
-    """
-    Args:
-        rx   (torch.Tensor): [R, 3]
-        tx   (torch.Tensor): [3]
-        gain (torch.Tensor): [R, 1]
-    """
-    device = gain.device
-    dtype = gain.dtype
-
-    rx_proj = rx[:, 0:2]  # [R, 2]
-    rx_AABB_min, _ = rx_proj.min(dim=0, keepdim=True)  # [1, 2]
-    rx_AABB_max, _ = rx_proj.max(dim=0, keepdim=True)  # [1, 2]
-    AABB_length = rx_AABB_max - rx_AABB_min  # [1, 2]
-    rx_proj = (rx_proj - rx_AABB_min) / AABB_length  # [R, 2]
-
-    if radius is None:
-        radius = int(math.sqrt(1.0 / rx_proj.shape[0] / math.pi))
-
-    if res_y is None:
-        width = AABB_length[0, 0]
-        height = AABB_length[0, 1]
-        aspect = float(width / height)
-        res_y = math.ceil(res_x / aspect)
-    H, W = res_y, res_x
-    r = 10
-    grid = torch.zeros((1, 1, H, W)).to(dtype).to(device)
-    gs_kernel = gkern(kernlen=2 * r + 1, device=device, dtype=dtype)
-    gs_kernel = gs_kernel.reshape(1, 1, 2 * r + 1, 2 * r + 1)
-    rx_proj[:, 0] *= W
-    rx_proj[:, 1] *= H
-    rx_proj = rx_proj.to(torch.int32)
-    rx_proj[:, 0] = torch.clamp(rx_proj[:, 0], 0, W - 1)
-    rx_proj[:, 1] = torch.clamp(rx_proj[:, 1], 0, H - 1)
-    grid = ApplyPositionBasedKernel(
-        grid=grid, kernel=gs_kernel, grid_pos=rx_proj, gain=gain
-    )
-
-    if tx is not None:
-        tx_proj = tx.reshape(-1, 3)[:, 0:2]
-        tx_proj = (tx_proj - rx_AABB_min) / AABB_length
-        tx_proj[:, 0] *= W
-        tx_proj[:, 1] *= H
-    else:
-        tx_proj = None
-
-    return [grid, tx_proj]
-
-
 def DeleteFloorOrCeil(
     verts: torch.Tensor, faces: torch.Tensor, axis: int = 2, mode="both"
 ) -> List[torch.Tensor]:
@@ -257,6 +181,32 @@ def DeleteFloorOrCeil(
     faces = faces.reshape(*faces_shape[:-2], *faces.shape)
 
     return [verts, faces]
+
+
+def ScaleAABB(
+    x: torch.Tensor, AABB: torch.Tensor = None, take_neg: bool = False
+) -> torch.Tensor:
+    dim = 3
+
+    if AABB is None:
+        # Take this as normalization, Compute your own AABB
+        AABB = torch.zeros((2, dim), dtype=x.dtype).to(x.device)
+        assert x.shape[-1] == dim
+        prev_x = x.reshape(-1, dim)
+        AABB[0] = prev_x.min(dim=0)[0].reshape(dim)
+        AABB[1] = prev_x.max(dim=0)[0].reshape(dim)
+
+    assert AABB.shape[-2] == 2
+    assert AABB.shape[-1] == dim
+
+    AABB_len = AABB[..., 1, :] - AABB[..., 0, :]  # [dim,]
+    AABB_min = AABB[..., 0, :]
+    x = (x - AABB_min) / AABB_len  # [0, 1]
+
+    if take_neg:
+        x = x * 2 - 1  # [-1, 1]
+
+    return x
 
 
 def RenderRoom(

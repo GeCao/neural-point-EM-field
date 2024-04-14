@@ -6,7 +6,7 @@ import math
 
 from src.EM.scenes import AbstractScene
 from src.EM.renderer.pointcloud_encoding import MVModel
-from src.EM.utils import ScaleToUintCube, PostProcessFeatures, FeatureWeighting
+from src.EM.utils import PostProcessFeatures, FeatureWeighting
 from src.EM.renderer.pointcloud_encoding import (
     PointFeatureAttention,
     PointNetLightFieldEncoder,
@@ -375,7 +375,7 @@ class PointLightFieldAblation(nn.Module):
         n_feat = self.n_pt_features
         n_pts = pts.shape[-2]
 
-        # 1. Transform x so that AABB is a unit cube
+        # 1. Transform x so that bbox is a unit cube
         pts_x = pts[..., 0:3].transpose(2, 1)  # [1, 3, n_pts]
         # 2. Encode point clouds to feature
         feat, trans, trans_feat = self._PointFeatures(

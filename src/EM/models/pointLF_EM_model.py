@@ -11,7 +11,7 @@ from src.EM.scenes import NeuralScene
 from src.EM.renderer import PointLightFieldRenderer
 from src.EM.managers import AbstractManager, SceneDataSet
 from src.EM.losses import ChannelLoss
-from src.EM.utils import TrainType, LearnTarget
+from src.EM.utils import TrainType, LearnTarget, ScaleAABB
 
 
 class PointLFEMModel(object):
@@ -357,29 +357,14 @@ class PointLFEMModel(object):
                     ],
                 )  # [n_probes, K_closet, 3]
                 n_probes, K_closest, _ = probe_to_pts_info.shape[-3:]
-                probe_mask = (
-                    torch.linspace(
-                        0,
-                        Batch_size - 1,
-                        Batch_size,
-                        device=torch.device("cpu"),
-                        dtype=torch.int32,
-                    )
-                    .reshape(Batch_size, 1)
-                    .repeat(1, n_rays)
-                    .flatten()
-                    .tolist(),
-                    probe_indices.flatten().cpu().tolist(),
-                )  # ([B*n_rays], [B*n_rays])
+                probe_mask = probe_indices.flatten().cpu().tolist()  # [B*n_rays]
                 probe_to_pts_indices = probe_to_pts_indices.view(n_probes, K_closest)
-                probe_to_pts_indices = probe_to_pts_indices[
-                    probe_indices.flatten().cpu().tolist()
-                ].view(
+                probe_to_pts_indices = probe_to_pts_indices[probe_mask].view(
                     Batch_size, n_rays, K_closest
                 )  # [B, n_rays, K_closest]
                 probe_to_pts_and_tx_info = torch.cat(
                     (
-                        probe_to_pts_info[probe_indices.flatten().cpu().tolist()].view(
+                        probe_to_pts_info[probe_mask].view(
                             Batch_size, n_rays, K_closest, 6
                         ),
                         probe_to_tx_info.unsqueeze(-2),
@@ -523,10 +508,7 @@ class PointLFEMModel(object):
                     train_type=int(TrainType.VALIDATION),
                     validation_name=self.scene.validation_target[0],
                 )
-                AABB = self.scene.GetAABB()  # [2, dim]
-                AABB_len = AABB[..., 1, :] - AABB[..., 0, :]  # [dim,]
-                AABB_min = AABB[..., 0, :]
-                tx_pos = (tx_pos - AABB_min) / AABB_len
+                tx_pos = ScaleAABB(tx_pos, AABB=self.scene.AABB, take_neg=False)
 
         mean_test_loss = np.array(test_loss_list).mean()
         return [mean_test_loss, tx_pos, rx_pos, predicted_gains, gt_gains]

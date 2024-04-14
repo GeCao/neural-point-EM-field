@@ -11,8 +11,10 @@ from src.EM.utils import (
     LoadMeshes,
     LoadPointCloudFromMesh,
     create_2d_meshgrid_tensor,
+    create_3d_meshgrid_tensor,
     DumpCFGFile,
     ModuleType,
+    ScaleAABB,
 )
 
 
@@ -77,18 +79,17 @@ class NeuralScene(AbstractScene):
             verts = torch.cat((verts, verts_floor), dim=-2)
             faces = torch.cat((faces, faces_floor + vert_offset), dim=-2)
 
-        # Normalization
+        # Normalization: Compute previous AABB
         verts_min = verts.reshape(-1, 3).min(dim=0)[0].reshape(3)
         verts_max = verts.reshape(-1, 3).max(dim=0)[0].reshape(3)
-        verts_len, scale_dim = (verts_max - verts_min).max(dim=0)
-        AABB_before_scale = torch.stack((verts_min, verts_max), dim=0)  # [2, dim]
+        prev_AABB = torch.stack((verts_min, verts_max), dim=0)  # [2, dim]
 
-        verts = 2.0 * (verts - verts_min[scale_dim]) / verts_len - 1.0
-        self.point_clouds = (
-            2.0 * (self.point_clouds - verts_min[scale_dim]) / verts_len - 1.0
-        )
+        # Normalization: Scale your geometry to [-1, 1]
+        verts = ScaleAABB(verts, AABB=prev_AABB, take_neg=True)
+        self.point_clouds = ScaleAABB(self.point_clouds, AABB=prev_AABB, take_neg=True)
         self.meshes = Meshes(verts=verts, faces=faces, textures=None)
 
+        # Normalization: Compute current AABB
         verts_min = verts.reshape(-1, 3).min(dim=0)[0].reshape(1, 3)
         verts_max = verts.reshape(-1, 3).max(dim=0)[0].reshape(1, 3)
         self.AABB = torch.cat((verts_min, verts_max), dim=0)  # [2, dim]
@@ -99,10 +100,10 @@ class NeuralScene(AbstractScene):
         # )
         self.point_clouds = self.point_clouds.to(device)
 
-        self.InfoLog(f"Before scaling, scene AABB: {AABB_before_scale.tolist()}")
+        self.InfoLog(f"Before scaling, scene AABB: {prev_AABB.tolist()}")
         self.InfoLog(f"After scaling, scene AABB: {self.AABB.tolist()}")
         self.AABB = self.AABB.to(device)
-        AABB_before_scale = AABB_before_scale.to(device)
+        prev_AABB = prev_AABB.to(device)
         self.log_manager.InfoLog(
             f"Point Clouds loading finished, with shape={self.point_clouds.shape}"
         )
@@ -145,20 +146,11 @@ class NeuralScene(AbstractScene):
             data["train"] = [
                 data["train"][i][0:1, ...] for i in range(len(data["train"]))
             ]
-            AABB_len, scale_dim = (AABB_before_scale[1] - AABB_before_scale[0]).max(
-                dim=0
+            data["train"][1] = ScaleAABB(
+                data["train"][1], AABB=prev_AABB, take_neg=True
             )
-            data["train"][1] = (
-                2.0
-                * (data["train"][1] - AABB_before_scale[0, scale_dim.item()])
-                / AABB_len
-                - 1.0
-            )
-            data["train"][2] = (
-                2.0
-                * (data["train"][2] - AABB_before_scale[0, scale_dim.item()])
-                / AABB_len
-                - 1.0
+            data["train"][2] = ScaleAABB(
+                data["train"][2], AABB=prev_AABB, take_neg=True
             )
 
             train_percent = 1.0
@@ -197,26 +189,11 @@ class NeuralScene(AbstractScene):
                 data["validation"][target_name][i][0:1, ...]
                 for i in range(len(data["validation"][target_name]))
             ]
-            AABB_len, scale_dim = (AABB_before_scale[1] - AABB_before_scale[0]).max(
-                dim=0
+            data["validation"][target_name][1] = ScaleAABB(
+                data["validation"][target_name][1], AABB=prev_AABB, take_neg=True
             )
-            data["validation"][target_name][1] = (
-                2.0
-                * (
-                    data["validation"][target_name][1]
-                    - AABB_before_scale[0, scale_dim.item()]
-                )
-                / AABB_len
-                - 1.0
-            )
-            data["validation"][target_name][2] = (
-                2.0
-                * (
-                    data["validation"][target_name][2]
-                    - AABB_before_scale[0, scale_dim.item()]
-                )
-                / AABB_len
-                - 1.0
+            data["validation"][target_name][2] = ScaleAABB(
+                data["validation"][target_name][2], AABB=prev_AABB, take_neg=True
             )
             # [F, T, R, 1] for ch
             (
@@ -264,27 +241,25 @@ class NeuralScene(AbstractScene):
         env_idx = 0
         # Light Probe, cover them on our map
         if not self.is_ablation():
-            self.n_row = 8
+            self.n_row = 6
             AABB = self.GetAABB()  # [2, dim] -> {min, max}
             AABB_len = (AABB[..., 1, :] - AABB[..., 0, :]).abs()  # [dim,]
             max_len, long_dim = AABB_len.max(dim=0)
             aspect = AABB_len / max_len  # [dim,] -> expect to be 0 < aspect <= 1
             light_probe_shape = (aspect * self.n_row).to(torch.int32).cpu().tolist()
-            H, W = light_probe_shape[1], light_probe_shape[0]
-            light_probe_shape = [1, 1, H, W]
-            light_probe = create_2d_meshgrid_tensor(
+            D, H, W = light_probe_shape[2], light_probe_shape[1], light_probe_shape[0]
+            light_probe_shape = [1, 1, D, H, W]
+            print("D H W = ", D, H, W)
+            light_probe = create_3d_meshgrid_tensor(
                 light_probe_shape, device=self.device, dtype=self.dtype
-            )  # [1, 2, H, W]
+            )  # [1, 3, D, H, W]
             light_probe = light_probe + 0.5
-            max_HW = max(H, W)
-            light_probe = 2.0 * light_probe / max_HW  # ->[0.0, 2.0]
+            max_res = max(D, max(H, W))
+            light_probe = 2.0 * light_probe / max_res  # ->[0.0, 2.0]
             light_probe[:, 0, ...] += self.AABB[0, 0]
             light_probe[:, 1, ...] += self.AABB[0, 1]
-            light_probe = light_probe.reshape(2, -1).transpose(0, 1)
-            z_mean = self.GetPointCloud(env_index=env_idx)[..., 2:3].mean()
-            light_probe = torch.cat(
-                (light_probe, torch.ones_like(light_probe[:, 0:1]) * z_mean), dim=-1
-            )  # [HW, 3]
+            light_probe[:, 2, ...] += self.AABB[0, 2]
+            light_probe = light_probe.reshape(3, -1).transpose(0, 1)  # [DHW, 3]
 
             self.light_probe_pos = light_probe
             self.InfoLog(

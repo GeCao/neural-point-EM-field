@@ -6,7 +6,7 @@ import math
 
 from src.EM.scenes import AbstractScene
 from src.EM.renderer.pointcloud_encoding import MVModel
-from src.EM.utils import ScaleToUintCube, PostProcessFeatures, FeatureWeighting
+from src.EM.utils import PostProcessFeatures, FeatureWeighting
 from src.EM.renderer.pointcloud_encoding import (
     PointFeatureAttention,
     PointNetLightFieldEncoder,
@@ -89,14 +89,14 @@ class LightFieldNet(nn.Module):
         self.ch_linear = DenseLayer(W, self.n_SH, activate=False)
         self.SH_basis_hlp = [
             0.5 / math.sqrt(math.pi),
-            math.sqrt(3.0 / (4.0 * math.pi)),
-            math.sqrt(3.0 / (4.0 * math.pi)),
-            math.sqrt(3.0 / (4.0 * math.pi)),
-            0.5 * math.sqrt(15.0 / math.pi),
-            0.5 * math.sqrt(15.0 / math.pi),
+            0.5 * math.sqrt(1.5 / math.pi),
+            0.5 * math.sqrt(1.5 / math.pi),
+            0.5 * math.sqrt(1.5 / math.pi),
+            0.25 * math.sqrt(7.5 / math.pi),
+            0.5 * math.sqrt(7.5 / math.pi),
             0.25 * math.sqrt(5.0 / math.pi),
-            0.5 * math.sqrt(15.0 / math.pi),
-            0.25 * math.sqrt(15.0 / math.pi),
+            0.5 * math.sqrt(7.5 / math.pi),
+            0.25 * math.sqrt(7.5 / math.pi),
         ]
 
     def forward(
@@ -159,20 +159,18 @@ class LightFieldNet(nn.Module):
         normal = F.normalize(-ray_d[:, :-1, None, :], dim=-1)  # [B, n_rays, ch, 3]
         SH_basis = torch.zeros_like(out[:, :-1, :, :])  # [B, n_rays, ch, 9]
         SH_basis[..., 0] = self.SH_basis_hlp[0]
-        SH_basis[..., 1] = self.SH_basis_hlp[1] * normal[..., 2]
-        SH_basis[..., 2] = self.SH_basis_hlp[2] * normal[..., 1]
-        SH_basis[..., 3] = self.SH_basis_hlp[3] * normal[..., 0]
-        SH_basis[..., 4] = self.SH_basis_hlp[4] * normal[..., 0] * normal[..., 2]
-        SH_basis[..., 5] = self.SH_basis_hlp[5] * normal[..., 2] * normal[..., 1]
+        SH_basis[..., 1] = self.SH_basis_hlp[1] * normal[..., 0]
+        SH_basis[..., 2] = self.SH_basis_hlp[2] * normal[..., 2]
+        SH_basis[..., 3] = self.SH_basis_hlp[3] * normal[..., 1]
+        SH_basis[..., 4] = self.SH_basis_hlp[4] * (
+            normal[..., 0] * normal[..., 0] - normal[..., 1] * normal[..., 1]
+        )
+        SH_basis[..., 5] = self.SH_basis_hlp[5] * normal[..., 0] * normal[..., 2]
         SH_basis[..., 6] = self.SH_basis_hlp[6] * (
-            -normal[..., 0] * normal[..., 0]
-            - normal[..., 2] * normal[..., 2]
-            + 2 * normal[..., 1] * normal[..., 1]
+            3 * normal[..., 2] * normal[..., 2] - 1
         )
-        SH_basis[..., 7] = self.SH_basis_hlp[7] * normal[..., 1] * normal[..., 0]
-        SH_basis[..., 8] = self.SH_basis_hlp[8] * (
-            normal[..., 1] * normal[..., 1] - normal[..., 2] * normal[..., 2]
-        )
+        SH_basis[..., 7] = self.SH_basis_hlp[7] * normal[..., 1] * normal[..., 2]
+        SH_basis[..., 8] = self.SH_basis_hlp[8] * (2 * normal[..., 0] * normal[..., 1])
 
         # n_rays + 1 Decompose:
         #     n_rays: SH_coeff * SH_basis (sample from light probe)
@@ -389,7 +387,7 @@ class PointLightField(nn.Module):
         n_feat = self.n_pt_features
         n_pts = pts.shape[-2]
 
-        # 1. Transform x so that AABB is a unit cube
+        # 1. Transform x so that bbox is a unit cube
         pts_x = pts[..., 0:3].transpose(2, 1)  # [B, 3, n_pts]
         # 2. Encode point clouds to feature
         feat, trans, trans_feat = self._PointFeatures(
