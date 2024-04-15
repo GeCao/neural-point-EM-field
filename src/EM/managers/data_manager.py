@@ -139,12 +139,7 @@ class DataManager(object):
         if "sionna" in str(data_path):
             # Different data management
             data_files = os.listdir(data_path)
-            if "etoicenter" in str(data_path):
-                target_list = ["111"]
-            elif "etoile" in str(data_path):
-                target_list = ["054"]
-            else:
-                target_list = ["111"]
+            target_list = ["default"]
         else:
             target_list = ["checkerboard", "genz", "gendiag"]
             if validation_target == "all":
@@ -166,12 +161,10 @@ class DataManager(object):
                 target_name = None
                 if "train" in filename:
                     target_name = "train"
+                elif "validation" in filename:
+                    target_name = "default"
                 else:
-                    for name in target_list:
-                        target_name = name if name in filename else target_name
-
-                    if target_name is None:
-                        continue
+                    raise RuntimeError(f"[error], cannot recognize file {filename}")
 
                 # load train/test data:
                 data = h5py.File(os.path.join(data_path, filename))
@@ -236,7 +229,6 @@ class DataManager(object):
                     if n_ch != 4:
                         raise RuntimeError("Regenerate your dataset!")
                     ch = ch.reshape(1, T, H * W, 4)  # [F, T, H*W, 1]
-                    # ch = ch[..., 0:1]  # TODO:
                     rx = rx[0:T, ...].reshape(1, T, H * W, 3)  # [F, T, H*W, dim=3]
                     tx = np.expand_dims(tx[0:T, ...], axis=0)  # [F, T, dim=3]
                     result["H"] = H
@@ -295,51 +287,5 @@ class DataManager(object):
                             ]
 
                         result["validation"][target_name] = tensors
-
-        if "sionna" in str(data_path):
-            vali_idx = []
-            for validation_name in result["validation"]:
-                idx = int(validation_name)
-                if validation_name.isdigit():
-                    vali_idx.append(idx)
-
-                result["validation"][validation_name] = [
-                    result["train"][0][:, idx : idx + 1, ...],
-                    result["train"][1][:, idx : idx + 1, ...],
-                    result["train"][2][:, idx : idx + 1, ...],
-                ]
-
-            if "etoicenter" in str(data_path):
-                vali_idx = vali_idx + [30, 31, 32, 54, 55, 56, 112, 113]
-            elif "etoile" in str(data_path):
-                vali_idx = vali_idx + [33, 34, 35, 55, 56, 66, 67, 68]
-            else:
-                vali_idx = vali_idx + [30, 31, 32, 54, 55, 56, 112, 113]
-            vali_idx = sorted(vali_idx, reverse=True)  # [large -> small]
-            print(f"Load validation name {vali_idx} from train dataset")
-            for i in range(len(vali_idx)):
-                result["train"] = [
-                    torch.cat(
-                        (
-                            result["train"][0][:, 0 : vali_idx[i], ...],
-                            result["train"][0][:, vali_idx[i] + 1 :, ...],
-                        ),
-                        dim=1,
-                    ),
-                    torch.cat(
-                        (
-                            result["train"][1][:, 0 : vali_idx[i], ...],
-                            result["train"][1][:, vali_idx[i] + 1 :, ...],
-                        ),
-                        dim=1,
-                    ),
-                    torch.cat(
-                        (
-                            result["train"][2][:, 0 : vali_idx[i], ...],
-                            result["train"][2][:, vali_idx[i] + 1 :, ...],
-                        ),
-                        dim=1,
-                    ),
-                ]
 
         return result

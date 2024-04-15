@@ -5,7 +5,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch3d.renderer.implicit.utils import RayBundle
 
 from src.EM.scenes import AbstractScene, Camera
 from src.EM.utils import TrainType
@@ -37,6 +36,29 @@ class RaySampler(nn.Module):
         Cylinder_res = RaySampler.squareToUniformCylinder(r1, r2)
         r = math.sqrt(1 - Cylinder_res[2] * Cylinder_res[2])
         return [r * Cylinder_res[0], r * Cylinder_res[1], Cylinder_res[2]]
+
+    @staticmethod
+    def GetDistAzimuthElevationFromVector(
+        r: torch.Tensor, eps: float = 1e-5
+    ) -> torch.Tensor:
+        assert r.shape[-1] == 3
+        dir = F.normalize(r, dim=-1)  # [..., 3]
+        dist = r.norm(dim=-1, keepdim=True)  # [..., 1]
+        elevation = torch.acos(
+            torch.clamp(r[..., 2:3] / (dist + eps), -1, 1)
+        )  # [..., 1]
+        azimuth = torch.acos(
+            torch.clamp(
+                r[..., 0:1] / (dist * torch.sin(elevation) + eps),
+                -1,
+                1,
+            )
+        )  # [..., 1] -> clamp(0, PI)
+        azimuth = torch.where(
+            r[..., 1:2] < 0.0, 2.0 * math.pi - azimuth, azimuth
+        )  # [..., 1] -> clamp(0, 2PI)
+        info = torch.cat((dir, dist, azimuth, elevation), dim=-1)  # [..., 6]
+        return info
 
     def Initialization(
         self,
@@ -144,61 +166,24 @@ class RaySampler(nn.Module):
             self.nodes[env_idx][train_type]["ray_d"] = ray_d.to(self.device)
             self.nodes[env_idx][train_type]["hit_sky"] = hit_sky.to(self.device)
 
-            tx_rx_r = (tx.unsqueeze(2) - rx).reshape(FTR, 3)  # [FTR, 3]
-            tx_rx_dir = F.normalize(tx_rx_r, dim=-1)  # [FTR, 3]
-            tx_rx_dist = tx_rx_r.norm(dim=-1).unsqueeze(-1)  # [FTR, 1]
-            tx_rx_elevation = torch.acos(
-                torch.clamp(tx_rx_r[..., 2:3] / (tx_rx_dist + eps), -1, 1)
-            )  # [FTR, 1]
-            tx_rx_azimuth = torch.acos(
-                torch.clamp(
-                    tx_rx_r[..., 0:1] / (tx_rx_dist * torch.sin(tx_rx_elevation) + eps),
-                    -1,
-                    1,
-                )
-            )  # [FTR, 1] -> clamp(0, PI)
-            tx_rx_azimuth = torch.where(
-                tx_rx_r[..., 1:2] < 0.0, 2.0 * math.pi - tx_rx_azimuth, tx_rx_azimuth
-            )  # [FTR, 1] -> clamp(0, 2PI)
-            self.nodes[env_idx][train_type]["tx_rx_dir"] = tx_rx_dir.to(self.device)
-            self.nodes[env_idx][train_type]["tx_rx_distance"] = tx_rx_dist.to(self.device)
-            self.nodes[env_idx][train_type]["tx_rx_elevation"] = tx_rx_elevation.to(self.device)
-            self.nodes[env_idx][train_type]["tx_rx_azimuth"] = tx_rx_azimuth.to(self.device)
+            tx_rx_r = (tx.unsqueeze(2) - rx).reshape(FTR, 1, 3)  # [FTR, 1, 3]
+            tx_rx_info = self.GetDistAzimuthElevationFromVector(r=tx_rx_r, eps=eps)
+            self.nodes[env_idx][train_type]["tx_rx_info"] = tx_rx_info.to(self.device)
 
             # 2. rx - pts info
             scene.InfoLog("Data Preparing: rx - pts information")
             nearest_pts_distance = nearest_pts_distance.unsqueeze(-1)
-            nearest_pts_elevation = torch.acos(
-                torch.clamp(
-                    nearest_pts_r[..., 2:3] / (nearest_pts_distance + eps), -1, 1
-                )
+            rx_nearest_pts_r = ray_d.unsqueeze(-2) * nearest_pts_distance
+            rx_nearest_pts_info = self.GetDistAzimuthElevationFromVector(
+                r=rx_nearest_pts_r, eps=eps
             )
-            nearest_pts_azimuth = torch.acos(
-                torch.clamp(
-                    nearest_pts_r[..., 0:1]
-                    / (nearest_pts_distance * torch.sin(nearest_pts_elevation) + eps),
-                    -1,
-                    1,
-                )
-            )  # [0, PI]
-            nearest_pts_azimuth = torch.where(
-                nearest_pts_r[..., 1:2] < 0.0,
-                2.0 * math.pi - nearest_pts_azimuth,
-                nearest_pts_azimuth,
-            )  # [0, 2PI]
 
             self.nodes[env_idx][train_type]["nearest_indices"] = nearest_indices.cpu()
-            self.nodes[env_idx][train_type][
-                "nearest_pts_distance"
-            ] = nearest_pts_distance.to(self.device)
-            self.nodes[env_idx][train_type][
-                "nearest_pts_elevation"
-            ] = nearest_pts_elevation.to(self.device)
-            self.nodes[env_idx][train_type][
-                "nearest_pts_azimuth"
-            ] = nearest_pts_azimuth.to(self.device)
+            self.nodes[env_idx][train_type]["rx_nearest_pts_info"] = (
+                rx_nearest_pts_info.to(self.device)
+            )
 
-            # 4. ground truth
+            # 3. ground truth
             scene.InfoLog("Data Preparing: Ground truth")
             if gain_only:
                 self.nodes[env_idx][train_type]["gt_channels"] = ch.reshape(
@@ -206,7 +191,9 @@ class RaySampler(nn.Module):
                 ).to(self.device)
             else:
                 self.nodes[env_idx][train_type]["gt_channels"] = (
-                    ch.reshape(FTR, n_ch, n_rays).transpose(1, 2)[..., 0:5].to(self.device)
+                    ch.reshape(FTR, n_ch, n_rays)
+                    .transpose(1, 2)[..., 0:5]
+                    .to(self.device)
                 )
                 # elevation inverse
                 self.nodes[env_idx][train_type]["gt_channels"][..., 4] = (
@@ -241,11 +228,11 @@ class RaySampler(nn.Module):
                 input=rx_probe_distance, k=n_rays, largest=False, dim=-1
             )  # [F*T*R, n_rays]
             index = nearest_indices.cpu().flatten().tolist()
-            nearest_light_probe_r = (
+            nearest_probe_r = (
                 light_probe_pos.reshape(n_probes, 3)[index].reshape(FTR, n_rays, 3)
                 - ray_o
             )  # [FTR, n_rays, 3]
-            ray_d = F.normalize(nearest_light_probe_r, dim=-1)  # [FTR, n_rays, 3]
+            ray_d = F.normalize(nearest_probe_r, dim=-1)  # [FTR, n_rays, 3]
             self.nodes[env_idx][train_type]["ray_o"] = ray_o.to(self.device)
             self.nodes[env_idx][train_type]["ray_d"] = ray_d.to(self.device)
         else:
@@ -261,7 +248,7 @@ class RaySampler(nn.Module):
                 ),
                 dim=-1,
             )  # [FTR, n_rays, 3]
-            light_probe_cosphi = (
+            probe_cosphi = (
                 ray_d[:, :, None, :]
                 * F.normalize(
                     light_probe_pos[None, :, :, :] - ray_o[:, :, None, :], dim=-1
@@ -269,183 +256,69 @@ class RaySampler(nn.Module):
             ).sum(
                 dim=-1
             )  # [FTR, n_rays, n_probes]
-            light_probe_sinphi = torch.sqrt(
-                1.0 - light_probe_cosphi * light_probe_cosphi
-            )
-            light_probe_proj_distance = light_probe_sinphi * (
+            probe_sinphi = torch.sqrt(1.0 - probe_cosphi * probe_cosphi)
+            probe_proj_distance = probe_sinphi * (
                 light_probe_pos[None, :, :, :] - ray_o[:, :, None, :]
             ).norm(
                 dim=-1
             )  # [FTR, n_rays, n_probes]
-            light_probe_proj_distance[light_probe_cosphi < 0] = (
-                100000000.0  # Delete back-side
-            )
+            probe_proj_distance[probe_cosphi < 0] = 100000000.0  # Delete back-side
             nearest_probe_proj_distance, nearest_indices = torch.topk(
-                input=light_probe_proj_distance, k=1, largest=False, dim=-1
+                input=probe_proj_distance, k=1, largest=False, dim=-1
             )  # [F*T*R, n_rays, 1]
             index = nearest_indices.cpu().flatten().tolist()
-            nearest_light_probe_r = (
+            nearest_probe_r = (
                 light_probe_pos.reshape(n_probes, 3)[index].reshape(FTR, n_rays, 3)
                 - ray_o
             )  # [FTR, n_rays, 3]
-            nearest_probe_distance = nearest_light_probe_r.norm(dim=-1)  # [FTR, n_rays]
+            nearest_probe_distance = nearest_probe_r.norm(dim=-1)  # [FTR, n_rays]
             self.nodes[env_idx][train_type]["ray_o"] = ray_o.to(self.device)
             self.nodes[env_idx][train_type]["ray_d"] = ray_d.to(self.device)
 
-        tx_rx_r = (tx.unsqueeze(2) - rx).reshape(FTR, 3)  # [FTR, 3]
-        tx_rx_dir = F.normalize(tx_rx_r, dim=-1)  # [FTR, 3]
-        tx_rx_dist = tx_rx_r.norm(dim=-1).unsqueeze(-1)  # [FTR, 1]
-        tx_rx_elevation = torch.acos(
-            torch.clamp(tx_rx_r[..., 2:3] / (tx_rx_dist + eps), -1, 1)
-        )  # [FTR, 1]
-        tx_rx_azimuth = torch.acos(
-            torch.clamp(
-                tx_rx_r[..., 0:1] / (tx_rx_dist * torch.sin(tx_rx_elevation) + eps),
-                -1,
-                1,
-            )
-        )  # [FTR, 1] -> clamp(0, PI)
-        tx_rx_azimuth = torch.where(
-            tx_rx_r[..., 1:2] < 0.0, 2.0 * math.pi - tx_rx_azimuth, tx_rx_azimuth
-        )  # [FTR, 1] -> clamp(0, 2PI)
-        self.nodes[env_idx][train_type]["tx_rx_dir"] = tx_rx_dir.to(self.device)
-        self.nodes[env_idx][train_type]["tx_rx_distance"] = tx_rx_dist.to(self.device)
-        self.nodes[env_idx][train_type]["tx_rx_elevation"] = tx_rx_elevation.to(
-            self.device
-        )
-        self.nodes[env_idx][train_type]["tx_rx_azimuth"] = tx_rx_azimuth.to(self.device)
+        tx_rx_r = (tx.unsqueeze(2) - rx).reshape(FTR, 1, 3)  # [FTR, 3]
+        rx_tx_info = self.GetDistAzimuthElevationFromVector(r=tx_rx_r, eps=eps)
+        self.nodes[env_idx][train_type]["rx_tx_info"] = rx_tx_info.to(self.device)
 
         # 2. rx - Light Probe info
         scene.InfoLog("Data Preparing: rx - Light probe information")
         nearest_probe_distance = nearest_probe_distance.unsqueeze(-1)
-        nearest_probe_elevation = torch.acos(
-            torch.clamp(
-                nearest_light_probe_r[..., 2:3] / (nearest_probe_distance + eps), -1, 1
-            )
+        nearest_probe_r = nearest_probe_distance * ray_d
+        rx_probe_info = self.GetDistAzimuthElevationFromVector(
+            r=nearest_probe_r, eps=eps
         )
-        nearest_probe_azimuth = torch.acos(
-            torch.clamp(
-                nearest_light_probe_r[..., 0:1]
-                / (nearest_probe_distance * torch.sin(nearest_probe_elevation) + eps),
-                -1,
-                1,
-            )
-        )  # [0, PI]
-        nearest_probe_azimuth = torch.where(
-            nearest_light_probe_r[..., 1:2] < 0.0,
-            2.0 * math.pi - nearest_probe_azimuth,
-            nearest_probe_azimuth,
-        )  # [0, 2PI]
 
         self.nodes[env_idx][train_type]["nearest_indices"] = nearest_indices.cpu()
-        self.nodes[env_idx][train_type]["nearest_probe_distance"] = (
-            nearest_probe_distance.to(self.device)
-        )
-        self.nodes[env_idx][train_type]["nearest_probe_elevation"] = (
-            nearest_probe_elevation.to(self.device)
-        )
-        self.nodes[env_idx][train_type]["nearest_probe_azimuth"] = (
-            nearest_probe_azimuth.to(self.device)
-        )
+        self.nodes[env_idx][train_type]["rx_probe_info"] = rx_probe_info.to(self.device)
 
         # 3.1 pts(tx) - Light Probe info
         scene.InfoLog("Data Preparing: pts - Light probe information")
         light_probe_pos = light_probe_pos.view(-1, 1, 3)  # [n_probes, 1, 3]
         pts = pts.view(1, -1, 3)  # [1, n_pts, 3]
-        light_probe_pts_distance = (light_probe_pos - pts).norm(
-            dim=-1
-        )  # [n_probes, n_pts,]
-        nearest_probe_pts_distance, nearest_probe_pts_indices = torch.topk(
-            input=light_probe_pts_distance, k=K_closest, largest=False, dim=-1
+        probe_pts_distance = (light_probe_pos - pts).norm(dim=-1)  # [n_probes, n_pts,]
+        probe_nearest_pts_distance, probe_nearest_pts_indices = torch.topk(
+            input=probe_pts_distance, k=K_closest, largest=False, dim=-1
         )  # [n_probes, K_closest,]
-        index = nearest_probe_pts_indices.cpu().flatten().tolist()
-        nearest_probe_pts_distance = nearest_probe_pts_distance.unsqueeze(-1)
-        nearest_probe_pts_r = (
+        index = probe_nearest_pts_indices.cpu().flatten().tolist()
+        probe_nearest_pts_r = (
             pts.reshape(n_pts, 3)[index].reshape(n_probes, K_closest, 3)
             - light_probe_pos
         )  # [n_probe, K_closest, 3]
-        nearest_probe_pts_dir = F.normalize(
-            nearest_probe_pts_r, dim=-1
-        )  # [n_probe, K_closest, 3]
-        nearest_probe_pts_elevation = torch.acos(
-            torch.clamp(
-                nearest_probe_pts_r[..., 2:3] / (nearest_probe_pts_distance + eps),
-                -1,
-                1,
-            )
-        )  # [n_probe, K_closest, 1]
-        nearest_probe_pts_azimuth = torch.acos(
-            torch.clamp(
-                nearest_probe_pts_r[..., 0:1]
-                / (
-                    nearest_probe_pts_distance * torch.sin(nearest_probe_pts_elevation)
-                    + eps
-                ),
-                -1,
-                1,
-            )
-        )  # [n_probe, K_closest, 1] -> clamp(0, PI)
-        nearest_probe_pts_azimuth = torch.where(
-            nearest_probe_pts_r[..., 1:2] < 0.0,
-            2.0 * math.pi - nearest_probe_pts_azimuth,
-            nearest_probe_pts_azimuth,
-        )  # [n_probe, K_closest, 1] -> clamp(0, 2PI)
+        probe_nearest_pts_info = self.GetDistAzimuthElevationFromVector(
+            r=probe_nearest_pts_r, eps=eps
+        )  # [n_probes, K_closest, 6]
         self.nodes[env_idx][train_type][
-            "nearest_probe_pts_indices"
-        ] = nearest_probe_pts_indices.cpu()
-        self.nodes[env_idx][train_type]["nearest_probe_pts_dir"] = (
-            nearest_probe_pts_dir.to(self.device)
-        )
-        self.nodes[env_idx][train_type]["nearest_probe_pts_distance"] = (
-            nearest_probe_pts_distance.to(self.device)
-        )
-        self.nodes[env_idx][train_type]["nearest_probe_pts_elevation"] = (
-            nearest_probe_pts_elevation.to(self.device)
-        )
-        self.nodes[env_idx][train_type]["nearest_probe_pts_azimuth"] = (
-            nearest_probe_pts_azimuth.to(self.device)
+            "probe_nearest_pts_indices"
+        ] = probe_nearest_pts_indices.cpu()
+        self.nodes[env_idx][train_type]["probe_nearest_pts_info"] = (
+            probe_nearest_pts_info.to(self.device)
         )
         # 3.2 Add tx information into this wrap
         scene.InfoLog("Data Preparing: tx - Light probe information")
         # tx:= [F, T, dim=3]
         tx = tx.view(1, T_, 3)  # [1, T, 3]
-        light_probe_tx_r = tx - light_probe_pos  # [n_probes, T, 3]
-        light_probe_tx_dir = F.normalize(light_probe_tx_r, dim=-1)  # [n_probes, T, 3]
-        light_probe_tx_distance = light_probe_tx_r.norm(dim=-1)  # [n_probes, T,]
-        light_probe_tx_distance = light_probe_tx_distance.unsqueeze(-1)
-        light_probe_tx_elevation = torch.acos(
-            torch.clamp(
-                light_probe_tx_r[..., 2:3] / (light_probe_tx_distance + eps), -1, 1
-            )
-        )  # [n_probe, T, 1]
-        light_probe_tx_azimuth = torch.acos(
-            torch.clamp(
-                light_probe_tx_r[..., 0:1]
-                / (light_probe_tx_distance * torch.sin(light_probe_tx_elevation) + eps),
-                -1,
-                1,
-            )
-        )  # [n_probe, T, 1] -> clamp(0, PI)
-        light_probe_tx_azimuth = torch.acos(
-            torch.clamp(
-                light_probe_tx_r[..., 0:1]
-                / (light_probe_tx_distance * torch.sin(light_probe_tx_elevation) + eps),
-                -1,
-                1,
-            )
-        )  # [n_probe, T, 1] -> clamp(0, PI)
-        self.nodes[env_idx][train_type]["light_probe_tx_dir"] = light_probe_tx_dir.to(
-            self.device
-        )
-        self.nodes[env_idx][train_type]["light_probe_tx_distance"] = (
-            light_probe_tx_distance.to(self.device)
-        )
-        self.nodes[env_idx][train_type]["light_probe_tx_elevation"] = (
-            light_probe_tx_elevation.to(self.device)
-        )
-        self.nodes[env_idx][train_type]["light_probe_tx_azimuth"] = (
-            light_probe_tx_azimuth.to(self.device)
-        )
+        probe_tx_r = tx - light_probe_pos  # [n_probes, T, 3]
+        probe_tx_info = self.GetDistAzimuthElevationFromVector(r=probe_tx_r, eps=eps)
+        self.nodes[env_idx][train_type]["probe_tx_info"] = probe_tx_info.to(self.device)
 
         # 4. ground truth
         scene.InfoLog("Data Preparing: Ground truth")
@@ -481,33 +354,17 @@ class RaySampler(nn.Module):
         self, env_idx: int, validation_name: str = None, train_type: int = 0
     ) -> List[torch.Tensor]:
         device = self.device
-        nearest_probe_pts_indices = self.nodes[env_idx][train_type][
-            "nearest_probe_pts_indices"
+        probe_nearest_pts_indices = self.nodes[env_idx][train_type][
+            "probe_nearest_pts_indices"
         ]  # [n_probes, K_closest,]
 
-        nearest_probe_pts_dir = self.nodes[env_idx][train_type][
-            "nearest_probe_pts_dir"
-        ].to(device)
-        nearest_probe_pts_distance = self.nodes[env_idx][train_type][
-            "nearest_probe_pts_distance"
-        ].to(device)
-        nearest_probe_pts_elevation = self.nodes[env_idx][train_type][
-            "nearest_probe_pts_elevation"
-        ].to(device)
-        nearest_probe_pts_azimuth = self.nodes[env_idx][train_type][
-            "nearest_probe_pts_azimuth"
-        ].to(device)
-        probe_pts_info = torch.cat(
-            (
-                nearest_probe_pts_dir,
-                nearest_probe_pts_distance,
-                nearest_probe_pts_azimuth,
-                nearest_probe_pts_elevation,
-            ),
-            dim=-1,
+        probe_nearest_pts_info = self.nodes[env_idx][train_type][
+            "probe_nearest_pts_info"
+        ].to(
+            device
         )  # [n_probes, K_closest, 6]
 
-        return [nearest_probe_pts_indices, probe_pts_info]
+        return [probe_nearest_pts_indices, probe_nearest_pts_info]
 
     def forward(
         self,
@@ -571,9 +428,6 @@ class RaySampler(nn.Module):
         ray_o = self.nodes[env_idx][train_type]["ray_o"][ftr_idx].to(
             device
         )  # [n_rays, 3]
-        ray_d = self.nodes[env_idx][train_type]["ray_d"][ftr_idx].to(
-            device
-        )  # [n_rays, 3]
         gt_channels = self.nodes[env_idx][train_type]["gt_channels"][ftr_idx].to(device)
         if self.nodes[env_idx][train_type]["interactions"] is not None:
             interactions = self.nodes[env_idx][train_type]["interactions"][ftr_idx].to(
@@ -582,62 +436,34 @@ class RaySampler(nn.Module):
         else:
             interactions = None
 
-        tx_rx_dir = self.nodes[env_idx][train_type]["tx_rx_dir"][ftr_idx].to(
+        rx_tx_info = self.nodes[env_idx][train_type]["rx_tx_info"][ftr_idx].to(
             device
-        )  # [3]
-        tx_rx_distance = self.nodes[env_idx][train_type]["tx_rx_distance"][ftr_idx].to(
-            device
-        )  # [1]
-        tx_rx_elevation = self.nodes[env_idx][train_type]["tx_rx_elevation"][
-            ftr_idx
-        ].to(
-            device
-        )  # [1]
-        tx_rx_azimuth = self.nodes[env_idx][train_type]["tx_rx_azimuth"][ftr_idx].to(
-            device
-        )  # [1]
-        rx_tx_info = torch.cat(
-            (
-                tx_rx_dir,
-                tx_rx_distance,
-                tx_rx_azimuth,
-                tx_rx_elevation,
-            ),
-            dim=-1,
-        ).view(
-            1, 6
         )  # [1, 6]
 
         if is_ablation:
             nearest_indices = self.nodes[env_idx][train_type]["nearest_indices"][
                 ftr_idx
             ]  # [n_ray,]
-            nearest_pts_distance = self.nodes[env_idx][train_type][
-                "nearest_pts_distance"
-            ][ftr_idx].to(device)
-            nearest_pts_elevation = self.nodes[env_idx][train_type][
-                "nearest_pts_elevation"
-            ][ftr_idx].to(device)
-            nearest_pts_azimuth = self.nodes[env_idx][train_type][
-                "nearest_pts_azimuth"
-            ][ftr_idx].to(device)
-            rx_pts_info = torch.cat(
-                (
-                    ray_d.unsqueeze(-2).repeat(1, nearest_pts_distance.shape[-2], 1),
-                    nearest_pts_distance,
-                    nearest_pts_azimuth,
-                    nearest_pts_elevation,
-                ),
-                dim=-1,
+            rx_nearest_pts_info = self.nodes[env_idx][train_type][
+                "rx_nearest_pts_info"
+            ][ftr_idx].to(
+                device
             )  # [n_rays, K, 6]
-            n_rays = rx_pts_info.shape[0]
-            rx_ptstx_info = torch.cat(
-                (rx_pts_info, rx_tx_info.reshape(1, 1, 6).repeat(n_rays, 1, 1)), dim=-2
+            n_rays = rx_nearest_pts_info.shape[0]
+            rx_nearest_pts_tx_info = torch.cat(
+                (rx_nearest_pts_info, rx_tx_info.reshape(1, 1, 6).repeat(n_rays, 1, 1)),
+                dim=-2,
             )  # [n_rays, K+1, 6]
 
             hit_sky = self.nodes[env_idx][train_type]["hit_sky"][ftr_idx].to(device)
 
-            results = [ray_o, nearest_indices, hit_sky, rx_ptstx_info, gt_channels]
+            results = [
+                ray_o,
+                nearest_indices,
+                hit_sky,
+                rx_nearest_pts_tx_info,
+                gt_channels,
+            ]
             if interactions is not None:
                 results = results + [interactions]
 
@@ -646,56 +472,17 @@ class RaySampler(nn.Module):
         nearest_indices = self.nodes[env_idx][train_type]["nearest_indices"][
             ftr_idx
         ]  # [n_ray,]
-        nearest_probe_distance = self.nodes[env_idx][train_type][
-            "nearest_probe_distance"
-        ][ftr_idx].to(device)
-        nearest_probe_elevation = self.nodes[env_idx][train_type][
-            "nearest_probe_elevation"
-        ][ftr_idx].to(device)
-        nearest_probe_azimuth = self.nodes[env_idx][train_type][
-            "nearest_probe_azimuth"
-        ][ftr_idx].to(device)
-        rx_probe_info = torch.cat(
-            (
-                ray_d,
-                nearest_probe_distance,
-                nearest_probe_azimuth,
-                nearest_probe_elevation,
-            ),
-            dim=-1,
+        rx_probe_info = self.nodes[env_idx][train_type]["rx_probe_info"][ftr_idx].to(
+            device
         )  # [n_rays, 6]
 
         rx_probetx_info = torch.cat((rx_probe_info, rx_tx_info), dim=0)  # [n_rays+1, 6]
 
-        light_probe_tx_dir = self.nodes[env_idx][train_type]["light_probe_tx_dir"][
+        probe_tx_info = self.nodes[env_idx][train_type]["probe_tx_info"][
             :, tx_idx, :
         ].to(
             device
-        )  # [n_probes, 3]
-        light_probe_tx_distance = self.nodes[env_idx][train_type][
-            "light_probe_tx_distance"
-        ][:, tx_idx, :].to(
-            device
-        )  # [n_probes, 1]
-        light_probe_tx_elevation = self.nodes[env_idx][train_type][
-            "light_probe_tx_elevation"
-        ][:, tx_idx, :].to(
-            device
-        )  # [n_probes, 1]
-        light_probe_tx_azimuth = self.nodes[env_idx][train_type][
-            "light_probe_tx_azimuth"
-        ][:, tx_idx, :].to(
-            device
-        )  # [n_probes, 1]
-        probe_tx_info = torch.cat(
-            (
-                light_probe_tx_dir,
-                light_probe_tx_distance,
-                light_probe_tx_azimuth,
-                light_probe_tx_elevation,
-            ),
-            dim=-1,
-        )  # [n_probes, 3]
+        )  # [n_probes, 6]
         probe_tx_info = probe_tx_info[
             nearest_indices.cpu().flatten().tolist()
         ]  # [n_rays, 3]

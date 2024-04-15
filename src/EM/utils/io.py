@@ -5,11 +5,8 @@ import torch
 import pywavefront
 import matplotlib.pyplot as plt
 import open3d as o3d
-import cv2
 from PIL import Image
 from typing import List
-from plyfile import PlyData, PlyElement
-from pytorch3d.renderer import Textures
 from pytorch3d.ops import sample_points_from_meshes
 from pytorch3d.structures import Meshes
 

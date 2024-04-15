@@ -156,8 +156,8 @@ class LightFieldNet(nn.Module):
 
         # Try SH-encoder (with n = 3)
         assert self.n_SH == 9
-        normal = F.normalize(-ray_d[:, :-1, None, :], dim=-1)  # [B, n_rays, ch, 3]
-        SH_basis = torch.zeros_like(out[:, :-1, :, :])  # [B, n_rays, ch, 9]
+        normal = F.normalize(-ray_d[:, :, None, :], dim=-1)  # [B, n_rays+1, ch, 3]
+        SH_basis = torch.zeros_like(out[:, :, :, :])  # [B, n_rays+1, ch, 9]
         SH_basis[..., 0] = self.SH_basis_hlp[0]
         SH_basis[..., 1] = self.SH_basis_hlp[1] * normal[..., 0]
         SH_basis[..., 2] = self.SH_basis_hlp[2] * normal[..., 2]
@@ -178,11 +178,7 @@ class LightFieldNet(nn.Module):
 
         if self.output_ch == 1 or self.output_ch == 4:
             # Only take gain as output
-            out = (out[:, :-1, :, :] * SH_basis).sum(dim=-1).sum(dim=1) + out[
-                :, -1, :, :
-            ].sum(
-                dim=-1
-            )  # [B, ch]
+            out = (out[:, :, :, :] * SH_basis).sum(dim=-1).sum(dim=1)  # [B, ch]
             out = out.view(n_batch, self.output_ch)
         else:
             # Take all the channel
