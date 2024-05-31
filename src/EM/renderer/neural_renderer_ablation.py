@@ -123,7 +123,6 @@ class PointLightFieldAblation(nn.Module):
         k_closest=30,
         n_sample_pts=1000,
         n_pt_features=8,
-        feature_encoder="pointnet_segmentation",
         feature_transform=True,
         lf_architecture={
             "D": 4,
@@ -154,18 +153,22 @@ class PointLightFieldAblation(nn.Module):
         n_feat_in = k_closest
         upscale_feat_maps = False
 
-        if feature_encoder == "multiview" or feature_encoder == "multiview_encoded":
-            self._PointFeatures = MVModel(task="cls", backbone="resnet18", feat_size=16)
-            self.n_pt_features = 128
-            self.pre_scale = True
-            self.feat_weighting = int(FeatureWeighting.MAXPOOL)
-        elif feature_encoder == "multiview_attention":
-            self._PointFeatures = MVModel(task="cls", backbone="resnet18", feat_size=16)
-            self.n_pt_features = 128
-            self.key_len = 64
-            self.pre_scale = True
-            self.feat_weighting = int(FeatureWeighting.ATTENTION)
-            self.AttentionModule = PointFeatureAttention(
+        self._PointFeatures = (
+            PointNetLightFieldEncoder(
+                k=self.n_pt_features,
+                feature_transform=feature_transform,
+                points_only=False,
+                original=True,
+            )
+            .to(device)
+            .to(dtype)
+        )
+        self.n_pt_features = 128
+        self.key_len = 64
+        self.pre_scale = False
+        self.feat_weighting = int(FeatureWeighting.ATTENTION)
+        self.AttentionModule = (
+            PointFeatureAttention(
                 feat_dim_in=self.n_pt_features,
                 feat_dim_out=self.n_pt_features,
                 embeded_dim=256,
@@ -174,40 +177,10 @@ class PointLightFieldAblation(nn.Module):
                 vdim=128,
                 new_encoding=self.new_enc,
             )
-            n_feat_in = 1
-        elif feature_encoder == "pointnet_ablation":
-            self._PointFeatures = (
-                PointNetLightFieldEncoder(
-                    k=self.n_pt_features,
-                    feature_transform=feature_transform,
-                    points_only=False,
-                    original=True,
-                )
-                .to(device)
-                .to(dtype)
-            )
-            self.n_pt_features = 128
-            self.key_len = 64
-            self.pre_scale = False
-            self.feat_weighting = int(FeatureWeighting.ATTENTION)
-            self.AttentionModule = (
-                PointFeatureAttention(
-                    feat_dim_in=self.n_pt_features,
-                    feat_dim_out=self.n_pt_features,
-                    embeded_dim=256,
-                    n_att_heads=8,
-                    kdim=128,
-                    vdim=128,
-                    new_encoding=self.new_enc,
-                )
-                .to(device)
-                .to(dtype)
-            )
-            n_feat_in = 1
-        else:
-            raise NotImplementedError(
-                f"The feature encode strategy of {feature_encoder} has not been implemented yet."
-            )
+            .to(device)
+            .to(dtype)
+        )
+        n_feat_in = 1
 
         self._LightField = (
             LightFieldNetAblation(
@@ -398,16 +371,16 @@ class PointLightFieldAblation(nn.Module):
             hit_pts = ~hit_sky
 
             pts_feat = feat[hit_pts.repeat(1, 1, 1, n_feat)].reshape(
-                1, -1, 1, n_feat
+                -1, 1, 1, n_feat
             )  # [1, x1, 1, n_feat]
             pts_distance = rx_to_pts_and_tx_distance[..., :-1, :][hit_pts].reshape(
-                1, -1, 1
+                -1, 1, 1
             )
             pts_azimuth = rx_to_pts_and_tx_azimuth[..., :-1, :][hit_pts].reshape(
-                1, -1, 1
+                -1, 1, 1
             )
             pts_elevation = rx_to_pts_and_tx_elevation[..., :-1, :][hit_pts].reshape(
-                1, -1, 1
+                -1, 1, 1
             )
 
             tx_distance = rx_to_pts_and_tx_distance[..., -1:, :]  # [B, n_rays, 1, 1]
@@ -415,18 +388,27 @@ class PointLightFieldAblation(nn.Module):
             tx_elevation = rx_to_pts_and_tx_elevation[..., -1:, :]  # [B, n_rays, 1, 1]
 
             tx_distance = tx_distance.repeat(1, 1, K_closest, 1)[hit_pts].reshape(
-                1, -1, 1
+                -1, 1, 1
             )
             tx_azimuth = tx_azimuth.repeat(1, 1, K_closest, 1)[hit_pts].reshape(
-                1, -1, 1
+                -1, 1, 1
             )
             tx_elevation = tx_elevation.repeat(1, 1, K_closest, 1)[hit_pts].reshape(
-                1, -1, 1
+                -1, 1, 1
             )
 
             queries = ray_dirs[..., :-1, :][hit_pts.repeat(1, 1, 1, 3)].reshape(
-                1, -1, 3
+                -1, 1, 3
             )
+            # print(queries.shape)
+            # print(pts_feat.shape)
+            # print(pts_distance.shape)
+            # print(pts_azimuth.shape)
+            # print(pts_elevation.shape)
+            # print(tx_distance.shape)
+            # print(tx_azimuth.shape)
+            # print(tx_elevation.shape)
+            # exit(0)
             pts_feat, attn_weights = self.AttentionModule(
                 directions=queries,
                 features=pts_feat,
@@ -436,7 +418,7 @@ class PointLightFieldAblation(nn.Module):
                 tx_distance=tx_distance,
                 tx_azimuth=tx_azimuth,
                 tx_elevation=tx_elevation,
-            )  # [1, x1, n_feat]
+            )  # [x1, 1, n_feat]
 
             feat = torch.zeros(
                 (batch_size, n_rays, K_closest, n_feat), dtype=ray_dirs.dtype
@@ -445,7 +427,7 @@ class PointLightFieldAblation(nn.Module):
 
             if hit_sky.sum() > 0:
                 sky_feat = feat[hit_sky.repeat(1, 1, 1, n_feat)].reshape(
-                    1, -1, 1, n_feat
+                    -1, 1, 1, n_feat
                 )  # [1, x2, 1, n_feat]
                 sky_feat = self._sky_latent.expand_as(sky_feat)
 
@@ -458,13 +440,13 @@ class PointLightFieldAblation(nn.Module):
                 ]  # [B, n_rays, 1, 1]
 
                 tx_distance = tx_distance.repeat(1, 1, K_closest, 1)[hit_sky].reshape(
-                    1, -1, 1
+                    -1, 1, 1
                 )
                 tx_azimuth = tx_azimuth.repeat(1, 1, K_closest, 1)[hit_sky].reshape(
-                    1, -1, 1
+                    -1, 1, 1
                 )
                 tx_elevation = tx_elevation.repeat(1, 1, K_closest, 1)[hit_sky].reshape(
-                    1, -1, 1
+                    -1, 1, 1
                 )
 
                 sky_distance = torch.zeros_like(tx_distance)
@@ -472,7 +454,7 @@ class PointLightFieldAblation(nn.Module):
                 sky_elevation = torch.zeros_like(tx_elevation)
 
                 queries = ray_dirs[..., :-1, :][hit_sky.repeat(1, 1, 1, 3)].reshape(
-                    1, -1, 3
+                    -1, 1, 3
                 )
                 sky_feat, attn_weights = self.AttentionModule(
                     directions=queries,
@@ -483,7 +465,7 @@ class PointLightFieldAblation(nn.Module):
                     tx_distance=tx_distance,
                     tx_azimuth=tx_azimuth,
                     tx_elevation=tx_elevation,
-                )  # [1, x2, n_feat]
+                )  # [x2, 1, n_feat]
                 feat[hit_sky.repeat(1, 1, 1, n_feat)] = sky_feat.flatten()
 
             feat = feat.sum(dim=-2)  # [B, n_rays, n_feat]
@@ -493,7 +475,8 @@ class PointLightFieldAblation(nn.Module):
             feat = torch.sum(feat[..., 0, :], dim=-2)  # [B, n_rays, n_features]
         else:
             feat, attn_weights = self.AttentionModule(
-                directions=ray_dirs[..., :-1, :],
+                pts_dir=probe_to_pts_and_tx_dir[..., :-1, :],
+                tx_dir=probe_to_pts_and_tx_dir[..., -1:, :],
                 features=feat,
                 pts_distance=rx_to_pts_and_tx_distance[..., :-1, :],
                 pts_azimuth=rx_to_pts_and_tx_azimuth[..., :-1, :],

@@ -1,6 +1,6 @@
 import os
 import numpy as np
-import json
+import math
 import h5py
 from typing import Dict, Any, List, Union
 import torch
@@ -12,10 +12,13 @@ from src.EM.utils import TrainType
 
 
 class SceneDataSet(Dataset):
-    def __init__(self, scene: NeuralScene, train_type: int) -> None:
+    def __init__(
+        self, scene: NeuralScene, train_type: int, batch_size: int = 1
+    ) -> None:
         super(SceneDataSet, self).__init__()
         self.scene = scene
         self.train_type = train_type  # See definition of Enum TrainType from utils
+        self.batch_size = batch_size
 
         self.num_envs = self.scene.GetNumEnvs(self.train_type)
         self.num_tx = self.scene.GetNumTransmitters(self.train_type)
@@ -24,29 +27,40 @@ class SceneDataSet(Dataset):
         self.validation_names = []
         if type(self.num_rx) == dict:
             self.lengths = []
-            self.total_length = 0
+            self.dataloader_lengths = []
             for i, key in enumerate(self.num_rx):
-                self.num_tx[key] = 1  # TODO: tx_idx=3 only
                 self.lengths.append(
                     self.num_envs[key] * self.num_tx[key] * self.num_rx[key]
                 )
-                self.total_length += self.lengths[i]
+
+                self.dataloader_lengths.append(
+                    self.num_envs[key]
+                    * self.num_tx[key]
+                    * math.ceil(self.num_rx[key] / batch_size)
+                )
+
                 self.validation_names.append(key)
         else:
             self.lengths = [self.num_envs * self.num_tx * self.num_rx]
-            self.total_length = self.lengths[0]
+            self.dataloader_lengths = [
+                self.num_envs * self.num_tx * math.ceil(self.num_rx / batch_size)
+            ]
+
+        self.total_length = sum(self.lengths)
+        self.dataloader_total_length = sum(self.dataloader_lengths)
 
         print("validation names = ", self.validation_names)
 
     def __len__(self) -> int:
-        return self.total_length
+        return self.dataloader_total_length
 
     def __getitem__(self, index: int) -> List[torch.Tensor]:
         with torch.no_grad():
             index = index % self.__len__()
             # points, distance, proj_distance, pitch, azimuth
-            for i, len_ in enumerate(self.lengths):
+            for i, len_ in enumerate(self.dataloader_lengths):
                 if index < len_:
+                    # Get your item:
                     validation_name = (
                         None
                         if len(self.validation_names) == 0
@@ -63,15 +77,17 @@ class SceneDataSet(Dataset):
                         if type(self.num_rx) != dict
                         else self.num_rx[validation_name]
                     )
+                    batched_num_rx = math.ceil(num_rx / self.batch_size)
 
-                    env_idx = index // (num_tx * num_rx)
-                    tx_idx = (index % (num_tx * num_rx)) // num_rx
-                    rx_idx = (index % (num_tx * num_rx)) % num_rx
-
-                    if self.train_type == int(TrainType.VALIDATION):
-                        tx_idx = 0  # TODO: tx_idx=3 only
+                    env_idx = index // (num_tx * batched_num_rx)
+                    tx_idx = (index % (num_tx * batched_num_rx)) // batched_num_rx
+                    batched_rx_idx = (
+                        index % (num_tx * batched_num_rx)
+                    ) % batched_num_rx
+                    rx_idx = batched_rx_idx * self.batch_size
 
                     return self.scene.RaySample(
+                        batch_size=self.batch_size,
                         env_idx=env_idx,
                         tx_idx=tx_idx,
                         rx_idx=rx_idx,
@@ -164,7 +180,8 @@ class DataManager(object):
                 elif "validation" in filename:
                     target_name = "default"
                 else:
-                    raise RuntimeError(f"[error], cannot recognize file {filename}")
+                    print(f"[error], cannot recognize file {filename}")
+                    continue
 
                 # load train/test data:
                 data = h5py.File(os.path.join(data_path, filename))
@@ -229,16 +246,22 @@ class DataManager(object):
                     if n_ch != 4:
                         raise RuntimeError("Regenerate your dataset!")
                     ch = ch.reshape(1, T, H * W, 4)  # [F, T, H*W, 1]
-                    rx = rx[0:T, ...].reshape(1, T, H * W, 3)  # [F, T, H*W, dim=3]
-                    tx = np.expand_dims(tx[0:T, ...], axis=0)  # [F, T, dim=3]
+                    # ch = ch[:, :, :, 3:4]
+                    rx = rx[:, ...].reshape(1, T, H * W, 3)  # [F, T, H*W, dim=3]
+                    tx = np.expand_dims(tx, axis=0)  # [F, T, dim=3]
                     result["H"] = H
                     result["W"] = W
                     print("Read channel: mean = ", ch.mean())
                     interactions = None
+                    print("ch = ", ch.shape)
 
                 ch = torch.from_numpy(ch).to(dtype).to(device)
                 rx = torch.from_numpy(rx).to(dtype).to(device)
                 tx = torch.from_numpy(tx).to(dtype).to(device)
+                if is_training and "validation" in filename:
+                    ch = ch[:, 0:4, ...]
+                    rx = rx[:, 0:4, ...]
+                    tx = tx[:, 0:4, ...]
                 if interactions is not None:
                     interactions = torch.from_numpy(interactions).to(dtype).to(device)
                     interactions[

@@ -66,7 +66,9 @@ class LightFieldNet(nn.Module):
 
         if not layer_modulation:
             Layer = DenseLayer
-            self.input_ch = self.n_feat_in * (n_pt_feat + (multires * 2 * 3 + 3))
+            self.input_ch = self.n_feat_in * (
+                n_pt_feat * self.output_ch + (multires * 2 * 3 + 3)
+            )
         else:
             Layer = ModulationLayer
             self.input_ch = multires * 2 * 3 + 3
@@ -86,7 +88,7 @@ class LightFieldNet(nn.Module):
         )
 
         self.n_SH = 9
-        self.ch_linear = DenseLayer(W, self.n_SH, activate=False)
+        self.ch_linear = DenseLayer(W, self.n_SH * output_ch, activate=False)
         self.SH_basis_hlp = [
             0.5 / math.sqrt(math.pi),
             0.5 * math.sqrt(1.5 / math.pi),
@@ -98,6 +100,98 @@ class LightFieldNet(nn.Module):
             0.5 * math.sqrt(7.5 / math.pi),
             0.25 * math.sqrt(7.5 / math.pi),
         ]
+
+    #     self.ray_ch = self.n_feat_in * (multires * 2 * 3 + 3)
+    #     self.probes_linears = nn.ModuleList(
+    #         [Layer(self.feat_ch, W, z_dim=3)]
+    #         + [
+    #             (
+    #                 Layer(W, W, z_dim=3)
+    #                 if i not in self.skips
+    #                 else Layer(W + self.ray_ch, W, z_dim=3)
+    #             )
+    #             for i in range(D - 1)
+    #         ]
+    #     )
+    #     self.SH_linear = DenseLayer(W, self.n_SH * output_ch, activate=False)
+    #     self.tx_linears = nn.ModuleList(
+    #         [Layer(self.ray_ch, W, z_dim=3)]
+    #         + [(Layer(W, W, z_dim=3)) for i in range(D - 1)]
+    #     )
+    #     self.final_linear = DenseLayer(W, output_ch, activate=False)
+
+    # def forward(
+    #     self,
+    #     feat: torch.Tensor,
+    #     ray_d: torch.Tensor,
+    #     rx_to_probe_and_tx_distance: torch.Tensor,
+    #     rx_to_probe_and_tx_azimuth: torch.Tensor,
+    #     rx_to_probe_and_tx_elevation: torch.Tensor,
+    # ):
+    #     """
+    #     Args:
+    #         feat                             (torch.Tensor):                [B, n_rays, n_feat]
+
+    #         ray_d                            (torch.Tensor):                [B, n_rays+1, dim=3]
+    #         rx_to_probe_and_tx_distance      (torch.Tensor):                [B, n_rays+1, 1]
+    #         rx_to_probe_and_tx_azimuth       (torch.Tensor):                [B, n_rays+1, 1]
+    #         rx_to_probe_and_tx_elevation     (torch.Tensor):                [B, n_rays+1, 1]
+    #     """
+    #     n_batch, n_rays, feat_ch = feat.shape  # [B, n_rays + 1, n_feat=128]
+    #     rx_to_probe_and_tx_z = torch.cat(
+    #         (
+    #             rx_to_probe_and_tx_distance,
+    #             rx_to_probe_and_tx_azimuth,
+    #             rx_to_probe_and_tx_elevation,
+    #         ),
+    #         dim=-1,
+    #     )  # [B, n_rays + 1, 3]
+    #     rx_to_probe_dir = ray_d[:, :-1, :]  # [B, n_rays, dim=3]
+    #     rx_to_probe_z = rx_to_probe_and_tx_z[:, :-1, :]  # [B, n_rays, 3]
+    #     rx_to_tx_dir = ray_d[:, -1, :]  # [B, dim=3]
+    #     rx_to_tx_z = rx_to_probe_and_tx_z[:, -1, :]  # [B, 3]
+
+    #     ray_info = self.pose_encoding(ray_d)  # [B, n_rays + 1, ray_ch]
+    #     ray_info = ray_info.reshape(n_batch, n_rays + 1, self.ray_ch)
+
+    #     for i, l in enumerate(self.probes_linears):
+    #         feat = self.probes_linears[i](feat, z=rx_to_probe_z)  # [B, n_rays, W]
+    #         if i in self.skips:
+    #             feat = torch.cat([ray_info[:, :-1, :], feat], -1)
+
+    #     SH_coeff = self.SH_linear(feat)  # [B, n_rays, :]
+    #     SH_coeff = SH_coeff.reshape(n_batch, n_rays, self.output_ch, self.n_SH)
+
+    #     # Try SH-encoder (with n = 3)
+    #     assert self.n_SH == 9
+    #     normal = F.normalize(-ray_d[:, :-1, None, :], dim=-1)  # [B, n_rays, ch, 3]
+    #     SH_basis = torch.zeros_like(SH_coeff)  # [B, n_rays, ch, 9]
+    #     SH_basis[..., 0] = self.SH_basis_hlp[0]
+    #     SH_basis[..., 1] = self.SH_basis_hlp[1] * normal[..., 0]
+    #     SH_basis[..., 2] = self.SH_basis_hlp[2] * normal[..., 2]
+    #     SH_basis[..., 3] = self.SH_basis_hlp[3] * normal[..., 1]
+    #     SH_basis[..., 4] = self.SH_basis_hlp[4] * (
+    #         normal[..., 0] * normal[..., 0] - normal[..., 1] * normal[..., 1]
+    #     )
+    #     SH_basis[..., 5] = self.SH_basis_hlp[5] * normal[..., 0] * normal[..., 2]
+    #     SH_basis[..., 6] = self.SH_basis_hlp[6] * (
+    #         3 * normal[..., 2] * normal[..., 2] - 1
+    #     )
+    #     SH_basis[..., 7] = self.SH_basis_hlp[7] * normal[..., 1] * normal[..., 2]
+    #     SH_basis[..., 8] = self.SH_basis_hlp[8] * (2 * normal[..., 0] * normal[..., 1])
+
+    #     indirect_radiance = (SH_coeff * SH_basis).sum(dim=-1)  # [B, n_rays, n_ch]
+
+    #     LOS_radiance = ray_info[:, -1, :]  # [B, ray_ch]
+    #     for i, l in enumerate(self.tx_linears):
+    #         LOS_radiance = self.tx_linears[i](LOS_radiance, z=rx_to_tx_z)  # [B, W]
+
+    #     LOS_radiance = self.final_linear(LOS_radiance)  # [B, n_ch]
+
+    #     radiance = (indirect_radiance + LOS_radiance[..., None, :]).sum(
+    #         dim=-2
+    #     )  # [B, n_ch]
+    #     return radiance
 
     def forward(
         self,
@@ -121,7 +215,7 @@ class LightFieldNet(nn.Module):
         feat = feat.unsqueeze(-2)  # [B, n_rays, 1, feat_ch]
 
         z, attn_weights = self.AttentionModule(
-            directions=ray_d[:, :, :],
+            dir=ray_d[..., :, :],
             features=feat,
             pts_distance=rx_to_probe_and_tx_distance[..., :-1, :],
             pts_azimuth=rx_to_probe_and_tx_azimuth[..., :-1, :],
@@ -129,21 +223,18 @@ class LightFieldNet(nn.Module):
             tx_distance=rx_to_probe_and_tx_distance[..., -1:, :],
             tx_azimuth=rx_to_probe_and_tx_azimuth[..., -1:, :],
             tx_elevation=rx_to_probe_and_tx_elevation[..., -1:, :],
-        )  # [B, n_rays+1, feat_ch * n_ch]
-        z = z.reshape(n_batch, n_rays + 1, feat_ch, self.output_ch)
-        z = z.permute((0, 3, 1, 2)).reshape(
-            n_batch * self.output_ch, n_rays + 1, feat_ch
-        )
-        ray_info = self.pose_encoding(ray_d)  # [B, 1, ray_ch]
-        ray_info = ray_info.unsqueeze(1).repeat(1, self.output_ch, 1, 1)
-        ray_info = ray_info.reshape(n_batch * self.output_ch, *ray_info.shape[2:])
+        )  # [B, n_rays + 1, feat_ch * n_ch]
+
+        ray_info = self.pose_encoding(ray_d[:, :, ...])  # [B, n_rays + 1, ray_ch]
 
         if not self.layer_modulation:
-            inputs = torch.cat([z, ray_info], dim=-1).view(n_batch, -1, self.input_ch)
+            inputs = torch.cat([z, ray_info], dim=-1).view(
+                n_batch, n_rays + 1, self.input_ch
+            )
             h = inputs
         else:
-            h = ray_info.view(n_batch * n_rays, self.input_ch)
-            z = z.view(n_batch * n_rays, self.feat_ch)
+            h = ray_info.view(n_batch, n_rays + 1, self.input_ch)
+            z = z.view(n_batch, n_rays + 1, self.feat_ch)
 
         for i, l in enumerate(self.pts_linears):
             h = self.pts_linears[i](h, z=z)
@@ -151,13 +242,13 @@ class LightFieldNet(nn.Module):
                 h = torch.cat([inputs, h], -1)
 
         out = self.ch_linear(h, z=z)
-        out = out.reshape(n_batch, self.output_ch, n_rays + 1, self.n_SH)
-        out = out.permute((0, 2, 1, 3))  # [B, n_rays+1, n_ch, 9]
+        out = -F.relu(out)  # torch.sigmoid(out)
+        out = out.reshape(n_batch, n_rays + 1, self.output_ch, self.n_SH)
 
         # Try SH-encoder (with n = 3)
         assert self.n_SH == 9
-        normal = F.normalize(-ray_d[:, :, None, :], dim=-1)  # [B, n_rays+1, ch, 3]
-        SH_basis = torch.zeros_like(out[:, :, :, :])  # [B, n_rays+1, ch, 9]
+        normal = F.normalize(-ray_d[:, :-1, None, :], dim=-1)  # [B, n_rays, ch, 3]
+        SH_basis = torch.zeros_like(out[:, :-1, :, :])  # [B, n_rays, ch, 9]
         SH_basis[..., 0] = self.SH_basis_hlp[0]
         SH_basis[..., 1] = self.SH_basis_hlp[1] * normal[..., 0]
         SH_basis[..., 2] = self.SH_basis_hlp[2] * normal[..., 2]
@@ -178,7 +269,11 @@ class LightFieldNet(nn.Module):
 
         if self.output_ch == 1 or self.output_ch == 4:
             # Only take gain as output
-            out = (out[:, :, :, :] * SH_basis).sum(dim=-1).sum(dim=1)  # [B, ch]
+            out = (out[:, :-1, :, :] * SH_basis).sum(dim=-1).sum(dim=1) + out[
+                :, -1, :, :
+            ].sum(
+                dim=-1
+            )  # [B, ch]
             out = out.view(n_batch, self.output_ch)
         else:
             # Take all the channel
@@ -230,7 +325,6 @@ class PointLightField(nn.Module):
         k_closest=30,
         n_sample_pts=1000,
         n_pt_features=8,
-        feature_encoder="pointnet_segmentation",
         feature_transform=True,
         lf_architecture={
             "D": 4,
@@ -261,18 +355,22 @@ class PointLightField(nn.Module):
         n_feat_in = k_closest
         upscale_feat_maps = False
 
-        if feature_encoder == "multiview" or feature_encoder == "multiview_encoded":
-            self._PointFeatures = MVModel(task="cls", backbone="resnet18", feat_size=16)
-            self.n_pt_features = 128
-            self.pre_scale = True
-            self.feat_weighting = int(FeatureWeighting.MAXPOOL)
-        elif feature_encoder == "multiview_attention":
-            self._PointFeatures = MVModel(task="cls", backbone="resnet18", feat_size=16)
-            self.n_pt_features = 128
-            self.key_len = 64
-            self.pre_scale = True
-            self.feat_weighting = int(FeatureWeighting.ATTENTION)
-            self.AttentionModule = PointFeatureAttention(
+        self._PointFeatures = (
+            PointNetLightFieldEncoder(
+                k=self.n_pt_features,
+                feature_transform=feature_transform,
+                points_only=False,
+                original=True,
+            )
+            .to(device)
+            .to(dtype)
+        )
+        self.n_pt_features = 128
+        self.key_len = 64
+        self.pre_scale = False
+        self.feat_weighting = int(FeatureWeighting.ATTENTION)
+        self.AttentionModule = (
+            PointFeatureAttention(
                 feat_dim_in=self.n_pt_features,
                 feat_dim_out=self.n_pt_features,
                 embeded_dim=256,
@@ -281,40 +379,10 @@ class PointLightField(nn.Module):
                 vdim=128,
                 new_encoding=self.new_enc,
             )
-            n_feat_in = 1
-        elif feature_encoder == "pointnet_ablation":
-            self._PointFeatures = (
-                PointNetLightFieldEncoder(
-                    k=self.n_pt_features,
-                    feature_transform=feature_transform,
-                    points_only=False,
-                    original=True,
-                )
-                .to(device)
-                .to(dtype)
-            )
-            self.n_pt_features = 128
-            self.key_len = 64
-            self.pre_scale = False
-            self.feat_weighting = int(FeatureWeighting.ATTENTION)
-            self.AttentionModule = (
-                PointFeatureAttention(
-                    feat_dim_in=self.n_pt_features,
-                    feat_dim_out=self.n_pt_features,
-                    embeded_dim=256,
-                    n_att_heads=8,
-                    kdim=128,
-                    vdim=128,
-                    new_encoding=self.new_enc,
-                )
-                .to(device)
-                .to(dtype)
-            )
-            n_feat_in = 1
-        else:
-            raise NotImplementedError(
-                f"The feature encode strategy of {feature_encoder} has not been implemented yet."
-            )
+            .to(device)
+            .to(dtype)
+        )
+        n_feat_in = 1
 
         # TODO:
         self._LightField = (
@@ -336,16 +404,11 @@ class PointLightField(nn.Module):
         )
 
         self.sky_dome = sky_dome
-        if self.sky_dome:
-            self._sky_latent = (
-                nn.Parameter(torch.rand(self.n_pt_features), requires_grad=True)
-                .to(device)
-                .to(dtype)
-            )
 
     def forward(
         self,
         pts: torch.Tensor,
+        probe_mask: List[int],
         probe_pts_mask: List[int],
         ray_dirs: torch.Tensor,
         rx_to_probe_and_tx_distance: torch.Tensor,
@@ -362,24 +425,26 @@ class PointLightField(nn.Module):
             pts                              (torch.Tensor):                [1, n_pts, dim=3]
             light_probe_pos                  (torch.Tensor):                [n_probes, dim=3]
 
-            probe_pts_mask                   (List[int]):                   x[probe_pts_mask] = [B*n_rays*K_closest, ...]
+            probe_mask                       (List[int]):                   probes[probe_pts_mask] = [B*n_rays, ...]
+            probe_pts_mask                   (List[int]):                   x[probe_pts_mask] = [n_probes*K_closest, ...]
 
             ray_dirs                         (torch.Tensor):                [B, n_rays+1, dim=3]
             rx_to_probe_and_tx_distance      (torch.Tensor):                [B, n_rays+1, 1]
             rx_to_probe_and_tx_azimuth       (torch.Tensor):                [B, n_rays+1, 1]
             rx_to_probe_and_tx_elevation     (torch.Tensor):                [B, n_rays+1, 1]
 
-            probe_to_pts_and_tx_dir          (torch.Tensor):                [B, n_rays, K_closest+1, dim=3]
-            probe_to_pts_and_tx_distance     (torch.Tensor):                [B, n_rays, K_closest+1, 1]
-            probe_to_pts_and_tx_azimuth      (torch.Tensor):                [B, n_rays, K_closest+1, 1]
-            probe_to_pts_and_tx_elevation    (torch.Tensor):                [B, n_rays, K_closest+1, 1]
+            probe_to_pts_and_tx_dir          (torch.Tensor):                [n_probes, K_closest+1, dim=3]
+            probe_to_pts_and_tx_distance     (torch.Tensor):                [n_probes, K_closest+1, 1]
+            probe_to_pts_and_tx_azimuth      (torch.Tensor):                [n_probes, K_closest+1, 1]
+            probe_to_pts_and_tx_elevation    (torch.Tensor):                [n_probes, K_closest+1, 1]
 
         Returns:
             torch.Tensor: rendered wireless channels with shape = [B, n_rays, 3] (TODO:)
         """
         batch_size = rx_to_probe_and_tx_distance.shape[0]
         n_rays = rx_to_probe_and_tx_distance.shape[1] - 1
-        K_closest = probe_to_pts_and_tx_distance.shape[2] - 1
+        n_probes = probe_to_pts_and_tx_distance.shape[0]
+        K_closest = probe_to_pts_and_tx_distance.shape[1] - 1
         n_feat = self.n_pt_features
         n_pts = pts.shape[-2]
 
@@ -392,18 +457,20 @@ class PointLightField(nn.Module):
 
         # 3. Select K-closest points features
         feat = feat.view(n_pts, n_feat)
-        feat = feat[probe_pts_mask]  # [B*n_rays*K_closest, feat]
-        feat = feat.view(batch_size, n_rays, K_closest, n_feat)
+        feat = feat[probe_pts_mask]  # [n_probes*K_closest, feat]
+        feat = feat.view(n_probes, K_closest, n_feat)
 
         # 4. Apply weighting strategy to features
         if self.feat_weighting == int(FeatureWeighting.MAXPOOL):
             feat, _ = torch.max(feat, dim=-2, keepdim=True)
         elif self.feat_weighting == int(FeatureWeighting.ATTENTION):
             n_feat_per_point = 1
-            feat = feat[..., None, :]  # [B, n_rays, K_closest, 1, n_feat]
+            feat = feat[..., None, :]  # [n_probes, K_closest, 1, n_feat]
 
+            # key: probes-pts
+            # val: probes-tx
             feat, attn_weights = self.AttentionModule(
-                directions=probe_to_pts_and_tx_dir[..., -1:, :],
+                dir=probe_to_pts_and_tx_dir[..., -1:, :],
                 features=feat,
                 pts_distance=probe_to_pts_and_tx_distance[..., :-1, :],
                 pts_azimuth=probe_to_pts_and_tx_azimuth[..., :-1, :],
@@ -411,14 +478,18 @@ class PointLightField(nn.Module):
                 tx_distance=probe_to_pts_and_tx_distance[..., -1:, :],
                 tx_azimuth=probe_to_pts_and_tx_azimuth[..., -1:, :],
                 tx_elevation=probe_to_pts_and_tx_elevation[..., -1:, :],
-            )  # [B, n_rays, n_feat]
+            )  # [n_probes, K_closest/1, n_feat]
+            # pooling with summation
+            feat = feat.sum(dim=1)  # [n_probes, n_feat]
+            feat = feat[probe_mask]  # [B*n_rays, n_feat]
+            feat = feat.reshape(batch_size, n_rays, n_feat)
         elif self.feat_weighting == int(FeatureWeighting.SUM):
             n_feat_per_point = feat.shape[-2]
             feat = torch.sum(feat, dim=-2, keepdim=True) / n_feat_per_point
             feat = torch.sum(feat[..., 0, :], dim=-2)  # [B, n_rays, n_features]
         else:
             feat, attn_weights = self.AttentionModule(
-                directions=probe_to_pts_and_tx_dir[..., -1:, :],
+                dir=probe_to_pts_and_tx_dir[..., -1:, :],
                 features=feat,
                 pts_distance=probe_to_pts_and_tx_distance[..., :-1, :],
                 pts_azimuth=probe_to_pts_and_tx_azimuth[..., :-1, :],
@@ -426,7 +497,7 @@ class PointLightField(nn.Module):
                 tx_distance=probe_to_pts_and_tx_distance[..., -1:, :],
                 tx_azimuth=probe_to_pts_and_tx_azimuth[..., -1:, :],
                 tx_elevation=probe_to_pts_and_tx_elevation[..., -1:, :],
-            )  # [B, n_rays, n_feat]
+            )
 
         # 5. Predict Light field output with pre-baked features and ray directions
         color = self._LightField(

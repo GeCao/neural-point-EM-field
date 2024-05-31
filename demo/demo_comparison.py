@@ -21,7 +21,7 @@ def get_rmse_psnr(scene_name: str, module_type: str):
     gt = np.asarray(h5f["gt"])
     h5f.close()
 
-    pred = pred / np.abs(pred).max()
+    pred = pred / np.abs(gt).max()
     gt = gt / np.abs(gt).max()
 
     mse = ((pred - gt) * (pred - gt)).mean()
@@ -40,6 +40,10 @@ def main():
         scene_name=scene_name, module_type="_ablation"
     )
     rmse_default, psnr_default = get_rmse_psnr(scene_name=scene_name, module_type="")
+
+    print("mse_MLP = ", rmse_MLP**2)
+    print("mse_ablation = ", rmse_ablation**2)
+    print("mse_default = ", rmse_default**2)
 
     print("rmse_MLP = ", rmse_MLP)
     print("rmse_ablation = ", rmse_ablation)

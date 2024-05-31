@@ -44,18 +44,17 @@ class RaySampler(nn.Module):
         assert r.shape[-1] == 3
         dir = F.normalize(r, dim=-1)  # [..., 3]
         dist = r.norm(dim=-1, keepdim=True)  # [..., 1]
-        elevation = torch.acos(
-            torch.clamp(r[..., 2:3] / (dist + eps), -1, 1)
-        )  # [..., 1]
+        elevation = torch.acos(dir[..., 2:3].clamp(-1, 1))  # [..., 1]
+        sin_elevation_inv = torch.where(
+            torch.sin(elevation).abs() < eps,
+            torch.zeros_like(elevation),
+            1.0 / torch.sin(elevation),
+        )
         azimuth = torch.acos(
-            torch.clamp(
-                r[..., 0:1] / (dist * torch.sin(elevation) + eps),
-                -1,
-                1,
-            )
+            (dir[..., 0:1] * sin_elevation_inv).clamp(-1, 1)
         )  # [..., 1] -> clamp(0, PI)
         azimuth = torch.where(
-            r[..., 1:2] < 0.0, 2.0 * math.pi - azimuth, azimuth
+            dir[..., 1:2] < 0, 2.0 * math.pi - azimuth, azimuth
         )  # [..., 1] -> clamp(0, 2PI)
         info = torch.cat((dir, dist, azimuth, elevation), dim=-1)  # [..., 6]
         return info
@@ -182,6 +181,10 @@ class RaySampler(nn.Module):
             self.nodes[env_idx][train_type]["rx_nearest_pts_info"] = (
                 rx_nearest_pts_info.to(self.device)
             )
+
+            tx_rx_r = (tx.unsqueeze(2) - rx).reshape(FTR, 1, 3)  # [FTR, 3]
+            rx_tx_info = self.GetDistAzimuthElevationFromVector(r=tx_rx_r, eps=eps)
+            self.nodes[env_idx][train_type]["rx_tx_info"] = rx_tx_info.to(self.device)
 
             # 3. ground truth
             scene.InfoLog("Data Preparing: Ground truth")
@@ -369,6 +372,7 @@ class RaySampler(nn.Module):
     def forward(
         self,
         scene: AbstractScene,
+        batch_size: int,
         env_idx: int,
         tx_idx: int,
         rx_idx: int,
@@ -424,38 +428,49 @@ class RaySampler(nn.Module):
             R_ = R_[validation_name]
 
         device = self.device
-        ftr_idx = env_idx * (T_ * R_) + tx_idx * R_ + rx_idx
-        ray_o = self.nodes[env_idx][train_type]["ray_o"][ftr_idx].to(
+        ftr_idx_start = env_idx * (T_ * R_) + tx_idx * R_ + rx_idx
+        rx_idx_end = rx_idx + batch_size
+        if rx_idx_end > R_:
+            rx_idx_end = R_
+
+        ftr_idx_end = env_idx * (T_ * R_) + tx_idx * R_ + rx_idx_end
+        ray_o = self.nodes[env_idx][train_type]["ray_o"][ftr_idx_start:ftr_idx_end].to(
             device
         )  # [n_rays, 3]
-        gt_channels = self.nodes[env_idx][train_type]["gt_channels"][ftr_idx].to(device)
+        gt_channels = self.nodes[env_idx][train_type]["gt_channels"][
+            ftr_idx_start:ftr_idx_end
+        ].to(device)
         if self.nodes[env_idx][train_type]["interactions"] is not None:
-            interactions = self.nodes[env_idx][train_type]["interactions"][ftr_idx].to(
-                device
-            )
+            interactions = self.nodes[env_idx][train_type]["interactions"][
+                ftr_idx_start:ftr_idx_end
+            ].to(device)
         else:
             interactions = None
 
-        rx_tx_info = self.nodes[env_idx][train_type]["rx_tx_info"][ftr_idx].to(
+        rx_tx_info = self.nodes[env_idx][train_type]["rx_tx_info"][
+            ftr_idx_start:ftr_idx_end
+        ].to(
             device
-        )  # [1, 6]
+        )  # [B, 1, 6]
 
         if is_ablation:
             nearest_indices = self.nodes[env_idx][train_type]["nearest_indices"][
-                ftr_idx
-            ]  # [n_ray,]
+                ftr_idx_start:ftr_idx_end
+            ]  # [B, n_ray,]
             rx_nearest_pts_info = self.nodes[env_idx][train_type][
                 "rx_nearest_pts_info"
-            ][ftr_idx].to(
+            ][ftr_idx_start:ftr_idx_end].to(
                 device
-            )  # [n_rays, K, 6]
-            n_rays = rx_nearest_pts_info.shape[0]
+            )  # [B, n_rays, K, 6]
+            n_rays = rx_nearest_pts_info.shape[-3]
             rx_nearest_pts_tx_info = torch.cat(
-                (rx_nearest_pts_info, rx_tx_info.reshape(1, 1, 6).repeat(n_rays, 1, 1)),
+                (rx_nearest_pts_info, rx_tx_info.unsqueeze(-3).repeat(1, n_rays, 1, 1)),
                 dim=-2,
-            )  # [n_rays, K+1, 6]
+            )  # [B, n_rays, K+1, 6]
 
-            hit_sky = self.nodes[env_idx][train_type]["hit_sky"][ftr_idx].to(device)
+            hit_sky = self.nodes[env_idx][train_type]["hit_sky"][
+                ftr_idx_start:ftr_idx_end
+            ].to(device)
 
             results = [
                 ray_o,
@@ -470,22 +485,26 @@ class RaySampler(nn.Module):
             return results
 
         nearest_indices = self.nodes[env_idx][train_type]["nearest_indices"][
-            ftr_idx
-        ]  # [n_ray,]
-        rx_probe_info = self.nodes[env_idx][train_type]["rx_probe_info"][ftr_idx].to(
+            ftr_idx_start:ftr_idx_end
+        ]  # [B, n_ray,]
+        batch_size, n_rays = nearest_indices.shape[0:2]
+        rx_probe_info = self.nodes[env_idx][train_type]["rx_probe_info"][
+            ftr_idx_start:ftr_idx_end
+        ].to(
             device
-        )  # [n_rays, 6]
+        )  # [B, n_rays, 6]
 
-        rx_probetx_info = torch.cat((rx_probe_info, rx_tx_info), dim=0)  # [n_rays+1, 6]
+        rx_probetx_info = torch.cat(
+            (rx_probe_info, rx_tx_info), dim=-2
+        )  # [B, n_rays+1, 6]
 
         probe_tx_info = self.nodes[env_idx][train_type]["probe_tx_info"][
             :, tx_idx, :
         ].to(
             device
         )  # [n_probes, 6]
-        probe_tx_info = probe_tx_info[
-            nearest_indices.cpu().flatten().tolist()
-        ]  # [n_rays, 3]
+        n_probes = probe_tx_info.shape[0]
+        probe_tx_info = probe_tx_info.reshape(n_probes, 1, 6)
 
         results = [ray_o, nearest_indices, rx_probetx_info, probe_tx_info, gt_channels]
         if interactions is not None:

@@ -10,7 +10,7 @@ class PointLightFieldMLP(nn.Module):
         self,
         W: int = 64,
         n_feat: int = 32,
-        input_ch: int = 6,
+        input_ch: int = 7,
         output_ch: int = 1,
         device: torch.device = torch.device("cpu"),
         dtype=torch.float32,
@@ -32,20 +32,11 @@ class PointLightFieldMLP(nn.Module):
         self.directional_MLP_fc1 = nn.Linear(self.n_feat, self.W).to(device).to(dtype)
         self.directional_MLP_fc2 = nn.Linear(self.W, output_ch).to(device).to(dtype)
 
-        # Parameters
-        self.log_K = nn.Parameter(
-            torch.Tensor([-15.0]).to(device).to(dtype), requires_grad=True
-        )
-        self.d0 = nn.Parameter(
-            torch.Tensor([1]).to(device).to(dtype), requires_grad=True
-        )
-        self.lambda_0 = nn.Parameter(
-            torch.Tensor([0.08]).to(device).to(dtype), requires_grad=True
-        )
-
     def forward(
         self,
+        pts: torch.Tensor,
         ray_o: torch.Tensor,
+        ray_d: torch.Tensor,
         rx_to_tx_distance: torch.Tensor,
         rx_to_tx_azimuth: torch.Tensor,
         rx_to_tx_elevation: torch.Tensor,
@@ -64,9 +55,7 @@ class PointLightFieldMLP(nn.Module):
         Returns:
             torch.Tensor: rendered wireless channels with shape = [B, n_rays, 3] (TODO:)
         """
-        x = torch.cat(
-            (ray_o, rx_to_tx_distance, rx_to_tx_azimuth, rx_to_tx_elevation), dim=-1
-        )
+        x = torch.cat((ray_o, ray_d, rx_to_tx_distance), dim=-1)
 
         # Spatial MLP
         x = self.spatial_MLP_fc1(x)

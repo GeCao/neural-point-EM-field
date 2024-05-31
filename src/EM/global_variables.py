@@ -13,7 +13,6 @@ scene_opt = {
         "k_closest": 8,
         "n_features": 128,
         "n_sample_pts": 500,
-        "pointfeat_encoder": "pointnet_ablation",
         "merge_pcd": True,
         "all_cams": False,
         "D_lf": 8,

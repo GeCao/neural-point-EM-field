@@ -15,7 +15,7 @@ from src.EM.utils import DumpCFGFile
 def SH_func(x_dir: np.ndarray, l: int, m: int, with_abs: bool = True) -> np.ndarray:
     result = None
     if l == 0:
-        result = 0.5 / math.sqrt(math.pi) * np.ones_like(x_dir[..., 0:1])
+        result = 0.5 * math.sqrt(0.5 / math.pi) * np.ones_like(x_dir[..., 0:1])
     elif l == 1:
         if m == -1:
             result = 0.5 * math.sqrt(1.5 / math.pi) * x_dir[..., 0:1]
@@ -40,7 +40,7 @@ def SH_func(x_dir: np.ndarray, l: int, m: int, with_abs: bool = True) -> np.ndar
         elif m == 0:
             result = (
                 0.25
-                * math.sqrt(5.0 / math.pi)
+                * math.sqrt(2.5 / math.pi)
                 * (3.0 * x_dir[..., 2:3] * x_dir[..., 2:3] - 1.0)
             )
         elif m == 1:
@@ -131,7 +131,7 @@ def squareToUniformSphere(r1: float, r2: float) -> List[float]:
 
 def main():
     random.seed(40)
-    n_rays = 5000
+    n_rays = 25000
     ray_d = np.array(
         [squareToUniformSphere(random.random(), random.random()) for i in range(n_rays)]
     )
@@ -144,7 +144,7 @@ def main():
     ls = [0, 1, 1, 1, 2, 2, 2, 2, 2]
     ms = [0, -1, 0, 1, -2, -1, 0, 1, 2]
     colors = [i for i in range(len(ls))]
-    band_width = 2
+    band_width = 1.0
     for i in range(len(ls)):
         l = ls[i]
         m = ms[i]
@@ -177,10 +177,10 @@ def main():
 
     pts[..., 1] += 25
     DumpCFGFile(
-        save_path=os.path.join(demo_path, "SH.cfg"),
+        save_path=demo_path,
+        save_name="SH",
         point_clouds=torch.from_numpy(pts).to(torch.float32),
         with_floor=False,
-        with_normalization=False,
         colors=torch.from_numpy(pts_color).to(torch.float32),
     )
 

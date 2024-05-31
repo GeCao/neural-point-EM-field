@@ -37,7 +37,6 @@ class PointLightFieldRenderer(nn.Module):
                 k_closest=self.light_field_opt["k_closest"],
                 n_sample_pts=self.light_field_opt["n_sample_pts"],
                 n_pt_features=self.light_field_opt["n_features"],
-                feature_encoder=self.light_field_opt["pointfeat_encoder"],
                 feature_transform=True,
                 lf_architecture={
                     "D": self.light_field_opt.get("D_lf", 4),
@@ -62,7 +61,6 @@ class PointLightFieldRenderer(nn.Module):
                 k_closest=self.light_field_opt["k_closest"],
                 n_sample_pts=self.light_field_opt["n_sample_pts"],
                 n_pt_features=self.light_field_opt["n_features"],
-                feature_encoder=self.light_field_opt["pointfeat_encoder"],
                 feature_transform=True,
                 lf_architecture={
                     "D": self.light_field_opt.get("D_lf", 4),
@@ -84,7 +82,8 @@ class PointLightFieldRenderer(nn.Module):
         pts: torch.Tensor,
         ray_o: torch.Tensor,
         rx_to_probe_and_tx_info: torch.Tensor,
-        probe_to_pts_indices: torch.Tensor,
+        probe_mask: List[int],
+        probe_to_pts_mask: List[int],
         probe_to_pts_and_tx_info: torch.Tensor,
     ):
         if self.training:
@@ -106,25 +105,23 @@ class PointLightFieldRenderer(nn.Module):
 
             probe_to_pts_and_tx_dir = probe_to_pts_and_tx_info[
                 ..., 0:3
-            ]  # [B, n_rays, K_closest+1, 3]
+            ]  # [n_probes, K_closest+1, 3]
             probe_to_pts_and_tx_distance = probe_to_pts_and_tx_info[
                 ..., 3:4
-            ]  # [B, n_rays, K_closest+1, 1]
+            ]  # [n_probes, K_closest+1, 1]
             probe_to_pts_and_tx_azimuth = probe_to_pts_and_tx_info[
                 ..., 4:5
-            ]  # [B, n_rays, K_closest+1, 1]
+            ]  # [n_probes, K_closest+1, 1]
             probe_to_pts_and_tx_elevation = probe_to_pts_and_tx_info[
                 ..., 5:6
-            ]  # [B, n_rays, K_closest+1, 1]
+            ]  # [n_probes, K_closest+1, 1]
             # K_closest_mask                  x[mask] -> Shape[B*n_rays, 3]
-            probe_pts_mask = (
-                probe_to_pts_indices.cpu().flatten().tolist()
-            )  # [B*n_rays*K_closest]
             for module_name, module in self.named_modules():
                 if isinstance(module, PointLightField):
                     prediction = module(
                         pts=pts,
-                        probe_pts_mask=probe_pts_mask,
+                        probe_mask=probe_mask,
+                        probe_pts_mask=probe_to_pts_mask,
                         ray_dirs=ray_d,
                         rx_to_probe_and_tx_distance=rx_to_probe_and_tx_distance,
                         rx_to_probe_and_tx_azimuth=rx_to_probe_and_tx_azimuth,
@@ -137,7 +134,9 @@ class PointLightFieldRenderer(nn.Module):
                     return prediction
                 elif isinstance(module, PointLightFieldMLP):
                     prediction = module(
+                        pts=pts,
                         ray_o=ray_o[:, 0, 0:3],
+                        ray_d=ray_d[:, -1, :],
                         rx_to_tx_distance=rx_to_probe_and_tx_distance[:, -1, :],
                         rx_to_tx_azimuth=rx_to_probe_and_tx_azimuth[:, -1, :],
                         rx_to_tx_elevation=rx_to_probe_and_tx_elevation[:, -1, :],

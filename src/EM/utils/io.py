@@ -16,6 +16,64 @@ def mkdir(path: str):
         os.makedirs(path)
 
 
+def LoadSingleMesh(
+    obj_path: str, device: torch.device = torch.device("cpu"), dtype=torch.float32
+) -> List[torch.Tensor]:
+    """Load mesh data from disk
+    We will typically load mesh from json file where,
+        'verts'--------[NumOfVertices, 3]
+        'faces'--------[NumOfFaces, 3]
+        'edges'--------[NumOfEdges, 2, 3]
+        'verts_rgba'---[1, NumofVertices, 4]
+        'materials'----{NumOfFaces->str}
+        'visible'------{NumOfFaces->bool}
+    are given.
+    """
+    if not os.path.exists(obj_path):
+        raise RuntimeError(
+            f"Mesh object path :{obj_path} not found, check your DataSet"
+        )
+
+    path_str = str(obj_path)
+
+    # A magic code for winert dataset
+    if "sionna" not in path_str and "_1" not in path_str:
+        return None
+
+    if ".obj" in path_str:
+        scene = pywavefront.Wavefront(obj_path, collect_faces=True)
+
+        new_v = torch.Tensor(scene.vertices).to(device).to(dtype)
+        new_f = torch.Tensor(scene.meshes[None].faces).to(device).to(torch.int32)
+
+        new_v = new_v.reshape(1, -1, 3)
+        new_f = new_f.reshape(1, -1, 3)
+    elif ".json" in path_str:
+        with open(obj_path, "r") as load_f:
+            json_data = json.load(load_f)
+            new_v = torch.Tensor(json_data["verts"]).to(device).to(dtype)
+            new_f = torch.Tensor(json_data["faces"]).to(device).to(torch.int32)
+            new_v = new_v.reshape(1, -1, 3)
+            new_f = new_f.reshape(1, -1, 3)
+            # new_e = torch.Tensor(json_data["edges"]).to(device).to(dtype)
+            # new_vcolor = (
+            #     torch.Tensor(json_data["verts_rgba"]).to(device).to(dtype)
+            # )
+        load_f.close()
+    elif ".ply" in path_str:
+        ply_data = o3d.io.read_triangle_mesh(obj_path)
+        new_v = np.asarray(ply_data.vertices)
+        new_f = np.asarray(ply_data.triangles)
+
+        new_v = new_v.reshape(1, -1, 3)
+        new_f = new_f.reshape(1, -1, 3)
+
+        new_v = torch.from_numpy(new_v).to(device).to(dtype)
+        new_f = torch.from_numpy(new_f).to(device).to(torch.int32)
+
+    return [new_v, new_f]
+
+
 def LoadMeshes(
     data_path: str,
     obj_folder: str = "objs",
@@ -32,93 +90,26 @@ def LoadMeshes(
         'visible'------{NumOfFaces->bool}
     are given.
     """
-    is_sionna = "sionna" in data_path
-    obj_path = os.path.join(data_path, obj_folder)
-    if not os.path.exists(obj_path):
-        raise RuntimeError(
-            f"Mesh object path :{obj_path} not found, check your DataSet"
-        )
-    data_files = os.listdir(obj_path)
+    obj_dir = os.path.join(data_path, obj_folder)
+    if not os.path.exists(obj_dir):
+        raise RuntimeError(f"Mesh object path :{obj_dir} not found, check your DataSet")
+    data_files = os.listdir(obj_dir)
     data_files = sorted(data_files)
 
     vertices = []
     faces = []
-    edges = []
-    verts_rgba = []
-    if not is_sionna:
-        for filename in data_files:
-            if filename[-5:] == ".json" and "1" in filename:
-                json_path = os.path.join(obj_path, filename)
-                with open(json_path, "r") as load_f:
-                    json_data = json.load(load_f)
-                    new_v = torch.Tensor(json_data["verts"]).to(device).to(dtype)
-                    new_f = torch.Tensor(json_data["faces"]).to(device).to(torch.int32)
-                    new_e = torch.Tensor(json_data["edges"]).to(device).to(dtype)
-                    new_vcolor = (
-                        torch.Tensor(json_data["verts_rgba"]).to(device).to(dtype)
-                    )
-                    vertices.append(new_v)
-                    faces.append(new_f)
-                    edges.append(new_e)
-                    verts_rgba.append(new_vcolor.reshape(-1, 4))
+    vert_offset = 0
+    for filename in data_files:
+        obj_path = os.path.join(obj_dir, filename)
+        new_v, new_f = LoadSingleMesh(obj_path=obj_path, device=device, dtype=dtype)
 
-                load_f.close()
-                break
-            elif filename[-4:] == ".obj" and "1" in filename:
-                json_path = os.path.join(obj_path, filename)
-                scene = pywavefront.Wavefront(json_path, collect_faces=True)
+        vertices.append(new_v)
+        faces.append(new_f + vert_offset)
 
-                new_v = torch.Tensor(scene.vertices).to(device).to(dtype)
-                new_f = (
-                    torch.Tensor(scene.meshes[None].faces).to(device).to(torch.int32)
-                )
-                vertices.append(new_v)
-                faces.append(new_f)
-                break
-    else:
-        for filename in data_files:
-            if filename[-4:] == ".obj":
-                json_path = os.path.join(obj_path, filename)
-                scene = pywavefront.Wavefront(json_path, collect_faces=True)
+        vert_offset += new_v.shape[-2]
 
-                new_v = torch.Tensor(scene.vertices).to(device).to(dtype)
-                new_f = (
-                    torch.Tensor(scene.meshes[None].faces).to(device).to(torch.int32)
-                )
-
-                new_v = new_v.reshape(1, -1, 3)
-                new_f = new_f.reshape(1, -1, 3)
-
-                if len(vertices) == 0:
-                    vertices = new_v
-                    faces = new_f
-                else:
-                    vert_offset = vertices.shape[-2]
-                    vertices = torch.cat((vertices, new_v), dim=-2)
-                    faces = torch.cat((faces, new_f + vert_offset), dim=-2)
-            elif filename[-4:] == ".ply":
-                json_path = os.path.join(obj_path, filename)
-                ply_data = o3d.io.read_triangle_mesh(json_path)
-                new_v = np.asarray(ply_data.vertices)
-                new_f = np.asarray(ply_data.triangles)
-
-                new_v = new_v.reshape(1, -1, 3)
-                new_f = new_f.reshape(1, -1, 3)
-
-                new_v = torch.from_numpy(new_v).to(dtype).to(device)
-                new_f = torch.from_numpy(new_f).to(torch.int32).to(device)
-
-                if len(vertices) == 0:
-                    vertices = new_v
-                    faces = new_f
-                else:
-                    vert_offset = vertices.shape[-2]
-                    vertices = torch.cat((vertices, new_v), dim=-2)
-                    faces = torch.cat((faces, new_f + vert_offset), dim=-2)
-
-    if type(vertices) == type([]):
-        vertices = torch.cat(vertices, dim=-2).reshape(1, -1, 3)
-        faces = torch.cat(faces, dim=-2).to(torch.int64).reshape(1, -1, 3)
+    vertices = torch.cat(vertices, dim=-2).reshape(1, -1, 3)
+    faces = torch.cat(faces, dim=-2).to(torch.int64).reshape(1, -1, 3)
 
     return [vertices, faces]
 
@@ -152,53 +143,62 @@ def export_asset(save_path: str, vertices: torch.Tensor, faces: torch.Tensor):
 
 def DumpCFGFile(
     save_path: str,
+    save_name: str,
     point_clouds: torch.Tensor,
-    colors: torch.Tensor = None,
     with_floor: bool = True,
-    with_normalization: bool = True,
+    light_probe: torch.Tensor = None,
 ):
-    point_clouds = point_clouds.reshape(-1, 3)
-    bounding_box = [
-        point_clouds.min(dim=0)[0].reshape(3),
-        point_clouds.max(dim=0)[0].reshape(3),
-    ]
-    if with_normalization:
-        point_clouds = point_clouds + bounding_box[0].unsqueeze(0)
-        point_clouds = point_clouds * 100
-        bounding_box = [
-            point_clouds.min(dim=0)[0].reshape(3),
-            point_clouds.max(dim=0)[0].reshape(3),
-        ]
-    lengths = bounding_box[1] - bounding_box[0]
-    length_x = max(lengths[0], lengths[1], lengths[2])
-    length_y = max(lengths[0], lengths[1], lengths[2])
-    length_z = max(lengths[0], lengths[1], lengths[2])
-    with open(save_path, "w+") as fp:
-        fp.write(f"Number of particles = {point_clouds.shape[0]}\n")
+    if len(point_clouds.shape) == 2:
+        point_clouds = point_clouds.reshape(1, -1, 3)
+    elif len(point_clouds.shape) != 3:
+        raise ValueError(f"point clouds should in shape [(B), N, dim=3]")
+
+    batch_size = point_clouds.shape[0]
+    mass = 1.0
+    floor_height = point_clouds[..., 2].min()
+    pts_types = [chr(ord("A") + i) + "V" for i in range(26)]
+    total_pts = point_clouds.shape[0] * point_clouds.shape[1]
+    if light_probe is not None:
+        assert len(light_probe.shape) == 2
+        total_pts += light_probe.shape[0]
+
+    with open(os.path.join(save_path, f"{save_name}.cfg"), "w+") as fp:
+        fp.write(f"Number of particles = {total_pts}\n")
         fp.write("A = 1 Angstrom (basic length-scale)\n")
-        fp.write(f"H0(1,1) = {length_x} A\n")
+        # x-axis
+        fp.write(f"H0(1,1) = {1} A\n")
         fp.write(f"H0(1,2) = {0} A\n")
         fp.write(f"H0(1,3) = {0} A\n")
+        # y-axis
         fp.write(f"H0(2,1) = {0} A\n")
-        fp.write(f"H0(2,2) = {length_y} A\n")
+        fp.write(f"H0(2,2) = {1} A\n")
         fp.write(f"H0(2,3) = {0} A\n")
+        # z-axis
         fp.write(f"H0(3,1) = {0} A\n")
         fp.write(f"H0(3,2) = {0} A\n")
-        fp.write(f"H0(3,3) = {length_z} A\n")
+        fp.write(f"H0(3,3) = {1} A\n")
+
         fp.write(".NO_VELOCITY.\n")
         fp.write(f"entry_count = {3}\n")
 
-        mass = 1.0
-        floor_height = point_clouds[:, 2].min()
-        for i in range(point_clouds.shape[0]):
-            particle_type = "H"
-            if point_clouds[i, 2] <= floor_height + 0.01 and with_floor:
-                particle_type = "F"
-            if colors is not None:
-                particle_type = str(colors[i].item())
-            fp.write(
-                f"{mass}\n{particle_type}\n{point_clouds[i, 0].item()} {point_clouds[i, 1].item()} {point_clouds[i, 2].item()}\n"
-            )
+        for batch_idx in range(batch_size):
+            pts_i = point_clouds[batch_idx]
+            n_pts = pts_i.shape[0]
+            for i in range(n_pts):
+                particle_type = pts_types[batch_idx % len(pts_types)]
+                if with_floor and pts_i[i, 2] <= floor_height + 0.01:
+                    # This is floor particle
+                    particle_type = "FL"
+                fp.write(
+                    f"{mass}\n{particle_type}\n{pts_i[i, 0].item()} {pts_i[i, 1].item()} {pts_i[i, 2].item()}\n"
+                )
+
+        if light_probe is not None:
+            for i in range(light_probe.shape[0]):
+                particle_type = "LP"
+                fp.write(
+                    f"{mass}\n{particle_type}\n{light_probe[i, 0].item()} {light_probe[i, 1].item()} {light_probe[i, 2].item()}\n"
+                )
 
     fp.close()
 

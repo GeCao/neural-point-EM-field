@@ -12,7 +12,6 @@ from src.EM.utils import (
     LoadPointCloudFromMesh,
     create_2d_meshgrid_tensor,
     create_3d_meshgrid_tensor,
-    DumpCFGFile,
     ModuleType,
     ScaleAABB,
 )
@@ -56,7 +55,7 @@ class NeuralScene(AbstractScene):
         num_pts_floor = 250 if has_floor else 0
         self.point_clouds = LoadPointCloudFromMesh(
             meshes=Meshes(verts=verts, faces=faces),
-            num_pts_samples=1000 - num_pts_floor,
+            num_pts_samples=5000 - num_pts_floor,
         )  # [F, n_pts, 3]
         if has_floor:
             verts_floor, faces_floor = LoadMeshes(
@@ -94,10 +93,6 @@ class NeuralScene(AbstractScene):
         verts_max = verts.reshape(-1, 3).max(dim=0)[0].reshape(1, 3)
         self.AABB = torch.cat((verts_min, verts_max), dim=0)  # [2, dim]
 
-        # DumpCFGFile(
-        #     save_path="/home/moritz/homework/neural-point-EM-field/demo/pointcloud.cfg",
-        #     point_clouds=self.point_clouds,
-        # )
         self.point_clouds = self.point_clouds.to(device)
 
         self.InfoLog(f"Before scaling, scene AABB: {prev_AABB.tolist()}")
@@ -221,6 +216,7 @@ class NeuralScene(AbstractScene):
 
     def RaySample(
         self,
+        batch_size: int,
         env_idx: int,
         tx_idx: int,
         rx_idx: int,
@@ -229,6 +225,7 @@ class NeuralScene(AbstractScene):
     ) -> List[torch.Tensor]:
         return self.ray_sampler(
             self,
+            batch_size=batch_size,
             env_idx=env_idx,
             tx_idx=tx_idx,
             rx_idx=rx_idx,
@@ -241,15 +238,15 @@ class NeuralScene(AbstractScene):
         env_idx = 0
         # Light Probe, cover them on our map
         if not self.is_ablation():
-            self.n_row = 10
+            self.n_row = 8
             AABB = self.GetAABB()  # [2, dim] -> {min, max}
             AABB_len = (AABB[..., 1, :] - AABB[..., 0, :]).abs()  # [dim,]
             max_len, long_dim = AABB_len.max(dim=0)
             aspect = AABB_len / max_len  # [dim,] -> expect to be 0 < aspect <= 1
             light_probe_shape = (aspect * self.n_row).to(torch.int32).cpu().tolist()
             D, H, W = light_probe_shape[2], light_probe_shape[1], light_probe_shape[0]
+            D = max(1, D)
             light_probe_shape = [1, 1, D, H, W]
-            print("D H W = ", D, H, W)
             light_probe = create_3d_meshgrid_tensor(
                 light_probe_shape, device=self.device, dtype=self.dtype
             )  # [1, 3, D, H, W]
@@ -268,7 +265,6 @@ class NeuralScene(AbstractScene):
             # light_probe_shape = (aspect * self.n_row).to(torch.int32).cpu().tolist()
             # H, W = light_probe_shape[1], light_probe_shape[0]
             # light_probe_shape = [1, 1, H, W]
-            # print("H W = ", H, W)
             # light_probe = create_2d_meshgrid_tensor(
             #     light_probe_shape, device=self.device, dtype=self.dtype
             # )  # [1, 2, H, W]

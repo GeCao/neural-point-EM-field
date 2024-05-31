@@ -29,12 +29,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set",
         type=str,
-        default="sionna_etoile",
+        default="sionna_etoile_shadowing_fastfading",
         choices=[
             "sionna_munich",
+            "sionna_munich_shadowing_fastfading",
             "sionna_etoile",
+            "sionna_etoile_shadowing_fastfading",
             "sionna_etoicenter",
+            "sionna_etoicenter_shadowing_fastfading",
             "sionna_wiindoor",
+            "sionna_wiindoor_shadowing_fastfading",
             "wiindoor",
             "wi3rooms_0",
         ],
@@ -56,7 +60,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--lr", type=float, default=0.0001, help="learning rate")
     parser.add_argument(
-        "--use_check_point", type=bool, default=True, help="Use Check Point?"
+        "--use_check_point", type=bool, default=False, help="Use Check Point?"
     )
     parser.add_argument(
         "--save_check_point", type=bool, default=True, help="Save Check Point?"

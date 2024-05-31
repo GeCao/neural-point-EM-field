@@ -199,12 +199,16 @@ def ScaleAABB(
     assert AABB.shape[-2] == 2
     assert AABB.shape[-1] == dim
 
-    AABB_len = AABB[..., 1, :] - AABB[..., 0, :]  # [dim,]
+    # AABB_len = AABB[..., 1, :] - AABB[..., 0, :]  # [dim,]
     AABB_min = AABB[..., 0, :]
-    x = (x - AABB_min) / AABB_len  # [0, 1]
+    AABB_max = AABB[..., 1, :]
+    AABB_center = (AABB_min + AABB_max) / 2.0
+    AABB_len, scale_dim = (AABB_max - AABB_min).max(dim=-1)
 
     if take_neg:
-        x = x * 2 - 1  # [-1, 1]
+        x = (x - AABB_center) / AABB_len * 2  # [-1, 1]
+    else:
+        x = (x - AABB_min) / AABB_len  # [0, 1]
 
     return x
 

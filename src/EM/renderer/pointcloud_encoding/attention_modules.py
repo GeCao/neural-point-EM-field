@@ -116,27 +116,16 @@ class FeatureDistanceEncoder(nn.Module):
     ):
         """
 
-        features: [Batch_sz, N_rays, N_k_closest, N_feat_maps, dim_feat]
-        pts_distance: [Batch_sz, N_rays, N_k_closest, 1]
-        tx_distance: [Batch_sz, N_rays, 1, 1]
+        features: [Batch_sz, N_rays, N_feat_maps, dim_feat]
+        pts_distance: [Batch_sz, N_rays, 1]
+        tx_distance: [Batch_sz, 1, 1]
         :return:
         :rtype:
         """
-        if features.dim() == 5:
-            n_batch, n_rays, k_closest, n_feat_maps, feat_len = features.shape
-            x_key = torch.empty(
-                n_batch, n_rays, k_closest, 0, device=pts_distance.device
-            )
-            x_val = None
-        elif features.dim() == 4:
-            n_batch, n_rays, n_feat_maps, feat_len = features.shape
-            k_closest = 1
-            x_key = torch.empty(n_batch, n_rays, 0, device=pts_distance.device)
-            x_val = None
-        else:
-            raise RuntimeError(
-                f"Dim of feature should be 4/5, your input is {features.dim()}"
-            )
+        assert features.dim() == 4
+        n_batch, n_rays, n_feat_maps, feat_len = features.shape
+        x_key = torch.empty(n_batch, n_rays, 0, device=pts_distance.device)
+        x_val = None
 
         # Normalize feature distances
         if self.used_distances["pts_distance"]:
@@ -205,20 +194,13 @@ class FeatureDistanceEncoder(nn.Module):
                 else torch.cat([x_val, enc_tx_elevation], dim=-1)
             )
 
-        if features.dim() == 5:
-            x_key = x_key[..., None, :].expand(
-                n_batch, n_rays, k_closest, n_feat_maps, self.enc_dist_dim_key
-            )
-            x_val = x_val[..., None, :].expand(
-                n_batch, n_rays, k_closest, n_feat_maps, self.enc_dist_dim_val
-            )
-        elif features.dim() == 4:
-            x_key = x_key[..., None, :].expand(
-                n_batch, n_rays, n_feat_maps, self.enc_dist_dim_key
-            )
-            x_val = x_val[..., None, :].expand(
-                n_batch, n_rays, n_feat_maps, self.enc_dist_dim_val
-            )
+        assert features.dim() == 4
+        x_key = x_key[..., None, :].expand(
+            n_batch, n_rays, n_feat_maps, self.enc_dist_dim_key
+        )
+        x_val = x_val[..., None, :].expand(
+            n_batch, n_rays, n_feat_maps, self.enc_dist_dim_val
+        )
 
         if self.use_feat:
             x_key = torch.cat(
@@ -227,25 +209,21 @@ class FeatureDistanceEncoder(nn.Module):
                     x_key,
                 ],
                 dim=-1,
-            ).reshape(n_batch * n_rays, k_closest * n_feat_maps, self.input_ch_key)
+            ).reshape(n_batch * n_rays, n_feat_maps, self.input_ch_key)
             x_val = torch.cat(
                 [
                     features[..., 1::2],
                     x_val,
                 ],
                 dim=-1,
-            ).reshape(n_batch * n_rays, k_closest * n_feat_maps, self.input_ch_val)
+            ).reshape(n_batch * n_rays, n_feat_maps, self.input_ch_val)
         else:
-            x_key = x_key.reshape(
-                n_batch * n_rays, k_closest * n_feat_maps, self.input_ch_key
-            )
-            x_val = x_val.reshape(
-                n_batch * n_rays, k_closest * n_feat_maps, self.input_ch_val
-            )
+            x_key = x_key.reshape(n_batch * n_rays, n_feat_maps, self.input_ch_key)
+            x_val = x_val.reshape(n_batch * n_rays, n_feat_maps, self.input_ch_val)
 
-        if features.dim() == 4:
-            x_key = x_key.reshape(n_batch, n_rays * n_feat_maps, self.input_ch_key)
-            x_val = x_val.reshape(n_batch, n_rays * n_feat_maps, self.input_ch_val)
+        assert features.dim() == 4
+        x_key = x_key.reshape(n_batch, n_rays * n_feat_maps, self.input_ch_key)
+        x_val = x_val.reshape(n_batch, n_rays * n_feat_maps, self.input_ch_val)
 
         for i, layer in enumerate(self.linear_key):
             x_key = layer(x_key)
@@ -498,7 +476,7 @@ class PointFeatureAttention(nn.Module):
 
     def forward(
         self,
-        directions: torch.Tensor,
+        dir: torch.Tensor,
         features: torch.Tensor,
         pts_distance: torch.Tensor = None,
         pts_azimuth: torch.Tensor = None,
@@ -509,15 +487,9 @@ class PointFeatureAttention(nn.Module):
         **kwargs,
     ):
         feat_dim = features.shape[-1]
-        if directions.dim() == 3:
-            n_batch, n_rays, _ = directions.shape
-        elif directions.dim() == 4:
-            n_batch, n_rays, K_closest, _ = directions.shape
-            directions = directions.reshape(n_batch * n_rays, K_closest, 3)
-        else:
-            raise RuntimeError(
-                f"Dim of ray_d should be 3/4, your input is {directions.dim()}"
-            )
+        assert dir.dim() == 3
+        n_batch, n_rays, _ = dir.shape
+
         # Generate Key and values from projected point cloud features and positional encoded ray-point distance with an MLP
         val, key = self.FeatureEncoder(
             features,
@@ -530,8 +502,10 @@ class PointFeatureAttention(nn.Module):
         )
 
         # Use encoded ray-dirs in MLP to get query vector
-        query = self.RayEncoder(directions)
-        # query = query[:, None]
+        query = self.RayEncoder(dir)  # [B, n_rays, n_feat]
+        # query2 = self.RayEncoder(tx_dir)  # [B, 1, n_feat // 2]
+        # query2 = query2.expand(*(query1.shape))
+        # query = torch.cat((query1, query2), dim=-1)  # [B, n_rays, n_feat]
 
         # Attention
         # Query Vector + per point Key + per-point value vector in transformer-style attention + pooling to create conditioning vector

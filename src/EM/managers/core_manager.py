@@ -1,7 +1,9 @@
 import os
 import numpy as np
 import torch
+import torch.nn.functional as F
 import time
+import h5py
 from typing import Dict
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -39,6 +41,10 @@ class CoreManager(AbstractManager):
         print("The root path of our project: ", self._root_path)
         print("The data path of our project: ", self._data_path)
 
+        seed = 42
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
         self.dtype = torch.float32
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dim = opt["dim"]
@@ -66,9 +72,6 @@ class CoreManager(AbstractManager):
         self._data_manager.Initialization()
 
     def run(self):
-        seed = 42
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
 
         if self.opt["use_check_point"] or not self.is_training:
             success = self.LoadCheckPoint()
@@ -91,7 +94,7 @@ class CoreManager(AbstractManager):
                         rx_pos,
                         predicted_gains,
                         gt_gains,
-                    ) = self.model.validation_on_scene()
+                    ) = self.model.validation_on_scene(num_vis=4)
 
                     self._log_manager.WriterAddScalar("train_loss", loss, epoch)
                     self._log_manager.WriterAddScalar("test_loss", test_loss, epoch)
@@ -119,7 +122,7 @@ class CoreManager(AbstractManager):
                 rx_pos,
                 predicted_gains,
                 gt_gains,
-            ) = self.model.validation_on_scene()
+            ) = self.model.validation_on_scene(num_vis=None)
             end_time = time.time()
             self.InfoLog(f"time for validation = {end_time - start_time}")
 
@@ -149,32 +152,82 @@ class CoreManager(AbstractManager):
             save_path = os.path.join(save_dir, f"env{env_idx}_validation.png")
 
         if self.scene.H is not None and self.scene.W is not None:
-            H, W = self.scene.H, self.scene.W
+            # 0. compute MSE/PSNR
+            inf_mask = gt_gains.abs() < 0.01
+            gt_gains[inf_mask] = 0
+            predicted_gains[inf_mask] = 0
+
+            gt_for_psnr = gt_gains.reshape(gt_gains.shape[0], -1)
+            gt_for_psnr = gt_for_psnr / gt_for_psnr.abs().max(dim=-1)[0].unsqueeze(-1)
+            pred_for_psnr = predicted_gains.reshape(predicted_gains.shape[0], -1)
+            pred_for_psnr = pred_for_psnr / pred_for_psnr.abs().max(dim=-1)[
+                0
+            ].unsqueeze(-1)
+            diff = pred_for_psnr - gt_for_psnr
+            mse = (diff * diff).mean(dim=-1)
+            rmse = torch.sqrt(mse)
+            f_max = torch.abs(gt_for_psnr).max(dim=-1)[0]
+            psnr = 20 * np.log10(f_max / rmse)
+            mse = mse.cpu().tolist()
+            rmse = rmse.cpu().tolist()
+            psnr = psnr.cpu().tolist()
+
+            # 1. Dump h5 information
+            inf_mask = gt_gains.abs() < 0.01
+            gt_gains[inf_mask] = 0
+            predicted_gains[inf_mask] = 0
+            batch_size, n_ch, H, W = predicted_gains.shape[0:4]
+            np_predicted_gains = predicted_gains.cpu().numpy()
+            np_gt_gains = gt_gains.cpu().numpy()
+            h5f = h5py.File(os.path.join(save_dir, "pred_and_gt.h5"), "w")
+            h5f.create_dataset(
+                "pred", data=np_predicted_gains.reshape(-1, H, W)
+            )  # [H, W]
+            h5f.create_dataset("gt", data=np_gt_gains.reshape(-1, H, W))  # [H, W]
+            h5f.close()
+
             blank_wid = 5
-            aspect = int((2.0 * W + blank_wid) / H)
+            inf_mask = gt_gains.abs() < 0.01
+            gt_gains[inf_mask] = torch.inf
+            predicted_gains[inf_mask] = torch.inf
+
+            pad = (0, blank_wid, 0, blank_wid)
+            predicted_gains = F.pad(predicted_gains, pad=pad, mode="constant", value=0)
+            predicted_gains = predicted_gains.permute((1, 2, 0, 3))
+            predicted_gains = predicted_gains.reshape(
+                n_ch, H + blank_wid, batch_size * (W + blank_wid)
+            )
+            predicted_gains = predicted_gains[..., :-blank_wid]
+
+            pad = (0, blank_wid, 0, 0)
+            gt_gains = F.pad(gt_gains, pad=pad, mode="constant", value=0)
+            gt_gains = gt_gains.permute((1, 2, 0, 3))
+            gt_gains = gt_gains.reshape(n_ch, H, batch_size * (W + blank_wid))
+            gt_gains = gt_gains[..., :-blank_wid]
+
+            pred_gt_gains = torch.cat((predicted_gains, gt_gains), dim=1)
+            pred_gt_gains = pred_gt_gains.squeeze(0).unsqueeze(-1)
+            np_pred_gt_gains = pred_gt_gains.cpu().numpy()
+            if n_ch == 1:
+                np_pred_gt_gains[np.abs(pred_gt_gains) < 0.01] = np.inf
+            elif n_ch != 3:
+                self.ErrorLog(
+                    f"The channel size should be 1 or 3, your input is {n_ch}"
+                )
+
             fig, ax = plt.subplots(1, 1)
             # plt.pcolormesh(new_gains)
             # plt.title("Prediction - Ground truth")
-            np_pred_gains = predicted_gains.cpu().numpy()
-            np_gt_gains = gt_gains.cpu().numpy()
-            np_pred_gains[np.abs(np_gt_gains) < 0.01] = np.inf
-            np_gt_gains[np.abs(np_gt_gains) < 0.01] = np.inf
-            np_pred_gains = np_pred_gains.reshape(H, W)
-            np_gt_gains = np_gt_gains.reshape(H, W)
-            blank_gain = np.zeros_like(np_gt_gains[..., 0:blank_wid])
-            blank_gain[...] = np.inf
-            np_pred_gt_gains = np.concatenate(
-                (np_pred_gains, blank_gain, np_gt_gains),
-                axis=-1,
-            )
-            if tx_pos is not None:
-                tx_pos = tx_pos.reshape(-1, 3)[:, 0:2]
-                tx_pos[..., 0] = tx_pos[..., 0] * W
-                tx_pos[..., 1] = tx_pos[..., 1] * H
-            plt.imshow(np_pred_gt_gains, origin="lower")
             # plt.colorbar()
+            plt.imshow(np_pred_gt_gains, origin="lower")
             plt.axis("off")
             if tx_pos is not None:
+                tx_pos = tx_pos[:, 0:2] / 2.0 + 0.5  # [B, 2] ~ 0->1
+                tx_pos[:, 0] = tx_pos[:, 0] * W + torch.linspace(
+                    0, tx_pos.shape[0] - 1, tx_pos.shape[0]
+                ) * (W + blank_wid)
+                tx_pos[:, 1] = tx_pos[:, 1] * H
+
                 x, y = (
                     tx_pos[:, 0].cpu().numpy(),
                     tx_pos[:, 1].cpu().numpy(),
@@ -182,21 +235,21 @@ class CoreManager(AbstractManager):
                 plt.scatter(x, y, c="red", marker="x")
 
                 x, y = (
-                    (tx_pos[:, 0] + W + blank_wid).cpu().numpy(),
-                    tx_pos[:, 1].cpu().numpy(),
+                    tx_pos[:, 0].cpu().numpy(),
+                    (tx_pos[:, 1] + H + blank_wid).cpu().numpy(),
                 )
                 plt.scatter(x, y, c="red", marker="x")
+
+                font = {"color": "red", "size": blank_wid}
+                for i in range(tx_pos.shape[0]):
+                    plt.text(
+                        W / 2 + i * (W + blank_wid),
+                        H,
+                        "PSNR={:.2f}".format(psnr[i]),
+                        fontdict=font,
+                    )
             plt.savefig(save_path, pad_inches=0, bbox_inches="tight")
             plt.close()
-
-            import h5py
-
-            np_pred_gains[np_pred_gains == np.inf] = 0.0
-            np_gt_gains[np_gt_gains == np.inf] = 0.0
-            h5f = h5py.File(os.path.join(save_dir, "pred_and_gt.h5"), "w")
-            h5f.create_dataset("pred", data=np_pred_gains.reshape(1, H, W))  # [H, W]
-            h5f.create_dataset("gt", data=np_gt_gains.reshape(1, H, W))  # [H, W]
-            h5f.close()
 
             return
         verts = self.scene.meshes.verts_list()[env_idx]
