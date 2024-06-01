@@ -148,9 +148,9 @@ class NeuralScene(AbstractScene):
                 data["train"][2], AABB=prev_AABB, take_neg=True
             )
 
+            # Train dataset and validation dataset has already been splitted
             train_percent = 1.0
             tx_split = int(data["train"][0].shape[1] * train_percent)
-            # TODO: rx_split
 
             self.nodes["train"] = [
                 data["train"][i][:, 0:tx_split, ...] for i in range(len(data["train"]))

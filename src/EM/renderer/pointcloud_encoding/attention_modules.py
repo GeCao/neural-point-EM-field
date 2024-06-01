@@ -129,11 +129,11 @@ class FeatureDistanceEncoder(nn.Module):
 
         # Normalize feature distances
         if self.used_distances["pts_distance"]:
-            pts_distance = torch.where(
-                pts_distance < 0.01,
-                100 * torch.ones_like(pts_distance),
-                1.0 / pts_distance,
-            )
+            # pts_distance = torch.where(
+            #     pts_distance < 0.01,
+            #     100 * torch.ones_like(pts_distance),
+            #     1.0 / pts_distance,
+            # )
             enc_pts_dist = self.poseEncodingLen(pts_distance)
             x_key = torch.cat([x_key, enc_pts_dist], dim=-1)
 
@@ -156,11 +156,11 @@ class FeatureDistanceEncoder(nn.Module):
             x_key = torch.cat([x_key, enc_pts_elevation], dim=-1)
 
         if self.used_distances["tx_distance"]:
-            tx_distance = torch.where(
-                tx_distance < 0.01,
-                100 * torch.ones_like(tx_distance),
-                1.0 / tx_distance,
-            )
+            # tx_distance = torch.where(
+            #     tx_distance < 0.01,
+            #     100 * torch.ones_like(tx_distance),
+            #     1.0 / tx_distance,
+            # )
             enc_tx_dist = self.txEncodingLen(tx_distance)
             x_val = (
                 enc_tx_dist
@@ -318,7 +318,6 @@ class RayPointPoseEncoder(nn.Module):
         x_dist_normalized = distance / distance.max(dim=-1).values[..., None]
 
         # Positional encoding of ray distances and projected distance
-        # TODO: Debug from here
         enc_proj = self.poseEncoding(x_proj_normalized[..., None])
         enc_dist = self.poseEncoding(x_dist_normalized[..., None])
         enc_angle = self.poseEncoding(angle[..., None])
@@ -549,7 +548,7 @@ class PointDistanceAttention(nn.Module):
         self.kq_len = kq_len
         self.val_len = v_len
 
-        # TODO: Integrate and Decide between multi head and single attention module
+        # Integrate and Decide between multi head and single attention module
         self.attention = ScaledDotProductAttention(1.0)
 
     def forward(

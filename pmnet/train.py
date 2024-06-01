@@ -140,10 +140,6 @@ def eval_model(model, test_loader, error="MSE", best_val=100, cfg=None):
         print(
             f"[*] model saved to: {RESULT_FOLDER}/{cfg.exp_name}_epoch{cfg.num_epochs}/{cfg.param_str}/model_{best_val:.5f}.pt"
         )
-        f_log.write(
-            f"[*] model saved to: {RESULT_FOLDER}/{cfg.exp_name}_epoch{cfg.num_epochs}/{cfg.param_str}/model_{best_val:.5f}.pt"
-        )
-        f_log.write("\n")
 
     model.train()
     return avg_loss, best_val
@@ -186,15 +182,6 @@ if __name__ == "__main__":
     print("RESULT_FOLDER: ", RESULT_FOLDER)
     print("cfg.param_str: ", cfg.param_str)
 
-    # write config on the log file
-    f_log = open(
-        f"{RESULT_FOLDER}/{cfg.exp_name}_epoch{cfg.num_epochs}/{cfg.param_str}/train.log",
-        "w",
-    )
-    f_log.write(f"Train started at {cfg.now}.\n")
-    for k, v in cfg.get_train_parameters().items():
-        f_log.write(f"{k}: {v}\n")
-
     writer = SummaryWriter(
         log_dir=f"{TENSORBOARD_PREFIX}/{cfg.exp_name}_epoch{cfg.num_epochs}/{cfg.param_str}"
     )
@@ -211,6 +198,7 @@ if __name__ == "__main__":
             ddf = pd.DataFrame(np.arange(1, num_of_maps))
             ddf.to_csv(csv_file, index=False)
             data_train = PMnet_usc(csv_file=csv_file, dir_dataset=args.data_root)
+            print(len(data_train))
         elif "etoicenter" in args.config.lower():
             from dataloader.loader_etoicenter import PMnetEtoiCenter
 
@@ -235,6 +223,7 @@ if __name__ == "__main__":
         train_size = int(dataset_size * cfg.train_ratio)
         # validation_size = int(dataset_size * 0.1)
         test_size = dataset_size - train_size
+        print(train_size, test_size)
         train_dataset, test_dataset = random_split(
             data_train,
             [train_size, test_size],
@@ -304,7 +293,7 @@ if __name__ == "__main__":
     print("[*] train ends... ")
     print(f"[*] best val loss: {best_val}")
 
-    f_log.write(f'Train finished at {datetime.today().strftime("%Y%m%d%H%M")}.\n')
-    f_log.close()
-
+    # conda activate gaussain-splatting
     # python train.py -d '../data/sionna_etoicenter_shadowing_fastfading/' -n 'pmnet_v3' -c 'config_etoicenter_pmnetV3_V2'
+    # python train.py -d '../data/USC/' -n 'pmnet_v3' -c 'config_USC_pmnetV3_V2'
+    # pip install scikit-image

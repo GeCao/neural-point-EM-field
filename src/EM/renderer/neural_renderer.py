@@ -101,98 +101,6 @@ class LightFieldNet(nn.Module):
             0.25 * math.sqrt(7.5 / math.pi),
         ]
 
-    #     self.ray_ch = self.n_feat_in * (multires * 2 * 3 + 3)
-    #     self.probes_linears = nn.ModuleList(
-    #         [Layer(self.feat_ch, W, z_dim=3)]
-    #         + [
-    #             (
-    #                 Layer(W, W, z_dim=3)
-    #                 if i not in self.skips
-    #                 else Layer(W + self.ray_ch, W, z_dim=3)
-    #             )
-    #             for i in range(D - 1)
-    #         ]
-    #     )
-    #     self.SH_linear = DenseLayer(W, self.n_SH * output_ch, activate=False)
-    #     self.tx_linears = nn.ModuleList(
-    #         [Layer(self.ray_ch, W, z_dim=3)]
-    #         + [(Layer(W, W, z_dim=3)) for i in range(D - 1)]
-    #     )
-    #     self.final_linear = DenseLayer(W, output_ch, activate=False)
-
-    # def forward(
-    #     self,
-    #     feat: torch.Tensor,
-    #     ray_d: torch.Tensor,
-    #     rx_to_probe_and_tx_distance: torch.Tensor,
-    #     rx_to_probe_and_tx_azimuth: torch.Tensor,
-    #     rx_to_probe_and_tx_elevation: torch.Tensor,
-    # ):
-    #     """
-    #     Args:
-    #         feat                             (torch.Tensor):                [B, n_rays, n_feat]
-
-    #         ray_d                            (torch.Tensor):                [B, n_rays+1, dim=3]
-    #         rx_to_probe_and_tx_distance      (torch.Tensor):                [B, n_rays+1, 1]
-    #         rx_to_probe_and_tx_azimuth       (torch.Tensor):                [B, n_rays+1, 1]
-    #         rx_to_probe_and_tx_elevation     (torch.Tensor):                [B, n_rays+1, 1]
-    #     """
-    #     n_batch, n_rays, feat_ch = feat.shape  # [B, n_rays + 1, n_feat=128]
-    #     rx_to_probe_and_tx_z = torch.cat(
-    #         (
-    #             rx_to_probe_and_tx_distance,
-    #             rx_to_probe_and_tx_azimuth,
-    #             rx_to_probe_and_tx_elevation,
-    #         ),
-    #         dim=-1,
-    #     )  # [B, n_rays + 1, 3]
-    #     rx_to_probe_dir = ray_d[:, :-1, :]  # [B, n_rays, dim=3]
-    #     rx_to_probe_z = rx_to_probe_and_tx_z[:, :-1, :]  # [B, n_rays, 3]
-    #     rx_to_tx_dir = ray_d[:, -1, :]  # [B, dim=3]
-    #     rx_to_tx_z = rx_to_probe_and_tx_z[:, -1, :]  # [B, 3]
-
-    #     ray_info = self.pose_encoding(ray_d)  # [B, n_rays + 1, ray_ch]
-    #     ray_info = ray_info.reshape(n_batch, n_rays + 1, self.ray_ch)
-
-    #     for i, l in enumerate(self.probes_linears):
-    #         feat = self.probes_linears[i](feat, z=rx_to_probe_z)  # [B, n_rays, W]
-    #         if i in self.skips:
-    #             feat = torch.cat([ray_info[:, :-1, :], feat], -1)
-
-    #     SH_coeff = self.SH_linear(feat)  # [B, n_rays, :]
-    #     SH_coeff = SH_coeff.reshape(n_batch, n_rays, self.output_ch, self.n_SH)
-
-    #     # Try SH-encoder (with n = 3)
-    #     assert self.n_SH == 9
-    #     normal = F.normalize(-ray_d[:, :-1, None, :], dim=-1)  # [B, n_rays, ch, 3]
-    #     SH_basis = torch.zeros_like(SH_coeff)  # [B, n_rays, ch, 9]
-    #     SH_basis[..., 0] = self.SH_basis_hlp[0]
-    #     SH_basis[..., 1] = self.SH_basis_hlp[1] * normal[..., 0]
-    #     SH_basis[..., 2] = self.SH_basis_hlp[2] * normal[..., 2]
-    #     SH_basis[..., 3] = self.SH_basis_hlp[3] * normal[..., 1]
-    #     SH_basis[..., 4] = self.SH_basis_hlp[4] * (
-    #         normal[..., 0] * normal[..., 0] - normal[..., 1] * normal[..., 1]
-    #     )
-    #     SH_basis[..., 5] = self.SH_basis_hlp[5] * normal[..., 0] * normal[..., 2]
-    #     SH_basis[..., 6] = self.SH_basis_hlp[6] * (
-    #         3 * normal[..., 2] * normal[..., 2] - 1
-    #     )
-    #     SH_basis[..., 7] = self.SH_basis_hlp[7] * normal[..., 1] * normal[..., 2]
-    #     SH_basis[..., 8] = self.SH_basis_hlp[8] * (2 * normal[..., 0] * normal[..., 1])
-
-    #     indirect_radiance = (SH_coeff * SH_basis).sum(dim=-1)  # [B, n_rays, n_ch]
-
-    #     LOS_radiance = ray_info[:, -1, :]  # [B, ray_ch]
-    #     for i, l in enumerate(self.tx_linears):
-    #         LOS_radiance = self.tx_linears[i](LOS_radiance, z=rx_to_tx_z)  # [B, W]
-
-    #     LOS_radiance = self.final_linear(LOS_radiance)  # [B, n_ch]
-
-    #     radiance = (indirect_radiance + LOS_radiance[..., None, :]).sum(
-    #         dim=-2
-    #     )  # [B, n_ch]
-    #     return radiance
-
     def forward(
         self,
         feat: torch.Tensor,
@@ -439,7 +347,7 @@ class PointLightField(nn.Module):
             probe_to_pts_and_tx_elevation    (torch.Tensor):                [n_probes, K_closest+1, 1]
 
         Returns:
-            torch.Tensor: rendered wireless channels with shape = [B, n_rays, 3] (TODO:)
+            torch.Tensor: rendered wireless channels with shape = [B, 3]
         """
         batch_size = rx_to_probe_and_tx_distance.shape[0]
         n_rays = rx_to_probe_and_tx_distance.shape[1] - 1
@@ -470,7 +378,7 @@ class PointLightField(nn.Module):
             # key: probes-pts
             # val: probes-tx
             feat, attn_weights = self.AttentionModule(
-                dir=probe_to_pts_and_tx_dir[..., -1:, :],
+                dir=probe_to_pts_and_tx_dir[..., :, :],
                 features=feat,
                 pts_distance=probe_to_pts_and_tx_distance[..., :-1, :],
                 pts_azimuth=probe_to_pts_and_tx_azimuth[..., :-1, :],
@@ -478,7 +386,10 @@ class PointLightField(nn.Module):
                 tx_distance=probe_to_pts_and_tx_distance[..., -1:, :],
                 tx_azimuth=probe_to_pts_and_tx_azimuth[..., -1:, :],
                 tx_elevation=probe_to_pts_and_tx_elevation[..., -1:, :],
-            )  # [n_probes, K_closest/1, n_feat]
+            )  # [n_probes, K_closest+1, n_feat]
+            occlusion_feat = feat[..., :-1, :]
+            LOS_feat = feat[..., -1:, :]
+            feat = occlusion_feat * LOS_feat
             # pooling with summation
             feat = feat.sum(dim=1)  # [n_probes, n_feat]
             feat = feat[probe_mask]  # [B*n_rays, n_feat]

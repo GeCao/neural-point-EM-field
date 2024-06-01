@@ -1,4 +1,4 @@
-# Neural Point EM Fields (xxxx 2024)
+## RayProNet: A Neural Point Field Framework for Radio Propagation Modeling in 3D Environments
 
 <img src="demo/pred_cm.png">
 
@@ -6,22 +6,21 @@
 #### Ge Cao, Zhen Peng
 
 
-Neural Point EM Fields represent scenes with a light field living on a sparse point cloud. As neural volumetric 
-rendering methods require dense sampling of the underlying functional scene representation, at hundreds of samples 
-along with a ray cast through the volume, they are fundamentally limited to small scenes with the same objects 
-projected to hundreds of training views. Promoting sparse point clouds to neural implicit light fields allows us to 
-represent large scenes effectively with only a single implicit sampling operation per ray.
+The radio wave propagation channel is central to the performance of wireless communication systems. 
+In this paper, we introduce a novel machine learning-empowered methodology for wireless channel modeling.
+The key ingredients include a point-cloud-based neural network and a spherical Harmonics encoder with light probes. 
+Our approach offers several significant advantages, including the flexibility to adjust antenna radiation patterns and transmitter/receiver locations, the capability to predict radio power maps, and the scalability of large-scale wireless scenes. As a result, it lays the groundwork for an end-to-end pipeline for network planning and deployment optimization. The proposed work is validated in various outdoor and indoor radio environments.
 
-These point light fields are a function of the ray direction, and local point feature neighborhood, allowing us to 
-interpolate the light field conditioned training images without dense object coverage and parallax. We assess the 
-proposed method for novel view synthesis on large driving scenarios, where we synthesize realistic unseen views that 
-existing implicit approaches fail to represent. We validate that Neural Point Light Fields make it possible to predict 
-videos along unseen trajectories previously only feasible to generate by explicitly modeling the scene.
+---
+<img src="demo/RayProNet_visualization.gif">
 
 ---
 
 ### Data Preparation
-#### TODO:
+#### 
+- We store our dataset under the directory: `data/{dataset_name}/{train.h5, validation.h5, obj/{*.obj, *.ply, *.json, etc.}}`
+- The training dataset and validation dataset of the paper can be found by: [dataset.zip](https://drive.google.com/file/d/1jm9j1hcFt4OAUoNVnro1qrctXwkxB6cP/view?usp=sharing)
+- We also provide a trained model: [trained_model.pt](https://drive.google.com/file/d/12ugcAMWa1I_k2xRSdFHiINEJqJf49JhS/view?usp=sharing), which should be placed into the directory: `save/{dataset_name}/model_{dataset_name}.pt`. After validation, you can collect your result at `save/{dataset_name}/imgs/pred_and_gt.h5`
 
 ---
 
@@ -44,16 +43,11 @@ conda install -c open3d-admin -c conda-forge open3d
 ```
 
 ---
-### Training and Validation
+### Training and Validation (Both in one file)
 ```
 cd demo
 python demo_EM.py
 ```
-
----
-### Visualization of Results
-
-TODO:
 
 ---
 #### Citation

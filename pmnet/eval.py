@@ -150,8 +150,8 @@ def eval_model(model, test_loader, error="MSE", cfg=None, infer_img_path=""):
 
     h5_name = os.path.join(infer_img_path, "inference_images", f"pred_and_gt_PMNet.h5")
     h5f = h5py.File(h5_name, "w")
-    h5f.create_dataset("pred", data=h5_pred.cpu().numpy())  # [H, W]
-    h5f.create_dataset("gt", data=h5_gt.cpu().numpy())  # [H, W]
+    h5f.create_dataset("pred", data=h5_pred[..., 1:-1].cpu().numpy())  # [H, W]
+    h5f.create_dataset("gt", data=h5_gt[..., 1:-1].cpu().numpy())  # [H, W]
     h5f.close()
 
     return avg_loss
@@ -285,4 +285,4 @@ if __name__ == "__main__":
         json.dump(result, f, indent=4)
     print("Evaluation score(RMSE): ", result)
 
-    # python eval.py --data_root '../data/sionna_etoicenter_shadowing_fastfading/' --network 'pmnet_v3' --model_to_eval './save/config_etoicenter_pmnetV3_V2_epoch500/16_0.0001_0.5_100/model_0.02903.pt' --config 'config_etoicenter_pmnetV3_V2'
+    # python eval.py --data_root '../data/sionna_etoicenter_shadowing_fastfading/' --network 'pmnet_v3' --model_to_eval './save/config_etoicenter_pmnetV3_V2_epoch30/128_0.0001_0.5_10/model_0.04070.pt' --config 'config_etoicenter_pmnetV3_V2'

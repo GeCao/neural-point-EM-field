@@ -29,7 +29,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_set",
         type=str,
-        default="sionna_etoile_shadowing_fastfading",
+        default="sionna_etoicenter_shadowing_fastfading",
         choices=[
             "sionna_munich",
             "sionna_munich_shadowing_fastfading",
