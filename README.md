@@ -2,6 +2,14 @@
 
 <img src="demo/pred_cm.png">
 
+---
+### Pipeline
+<img src="galleries/teaser.png">
+
+---
+<img src="galleries/pipeline.png">
+
+
 ### [Project Page](git@github.com:GeCao/neural-point-EM-field.git) 
 #### Ge Cao, Zhen Peng
 
@@ -12,7 +20,16 @@ The key ingredients include a point-cloud-based neural network and a spherical H
 Our approach offers several significant advantages, including the flexibility to adjust antenna radiation patterns and transmitter/receiver locations, the capability to predict radio power maps, and the scalability of large-scale wireless scenes. As a result, it lays the groundwork for an end-to-end pipeline for network planning and deployment optimization. The proposed work is validated in various outdoor and indoor radio environments.
 
 ---
-<img src="demo/RayProNet_visualization.gif">
+<img src="galleries/RayProNet_visualization.gif">
+
+---
+### Our talk is currently available at:
+
+https://vimeo.com/1096085994?fl=pl&fe=cm
+
+
+---
+<img src="galleries/end_to_end_locations.png" height="200"/> <img src="galleries/end_to_end.png" height="200"/>
 
 ---
 
