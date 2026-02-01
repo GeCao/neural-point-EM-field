@@ -52,7 +52,16 @@ python demo_EM.py
 ---
 #### Citation
 ```
-TODO:
+@ARTICLE{RayProNet2024,
+  author={Cao, Ge and Peng, Zhen},
+  journal={IEEE Journal on Multiscale and Multiphysics Computational Techniques}, 
+  title={RayProNet: A Neural Point Field Framework for Radio Propagation Modeling in 3D Environments}, 
+  year={2024},
+  volume={9},
+  number={},
+  pages={330-340},
+  doi={10.1109/JMMCT.2024.3464373}}
+
 ```
 
 
